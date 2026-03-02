@@ -1,0 +1,55 @@
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import api from '@/lib/api';
+import type { User } from '@/types';
+
+interface AuthState {
+  user: User | null;
+  token: string | null;
+  isLoading: boolean;
+  _hasHydrated: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => void;
+  setUser: (user: User) => void;
+  setHasHydrated: (v: boolean) => void;
+}
+
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set) => ({
+      user: null,
+      token: null,
+      isLoading: false,
+      _hasHydrated: false,
+      setHasHydrated: (v) => set({ _hasHydrated: v }),
+
+      login: async (email, password) => {
+        set({ isLoading: true });
+        try {
+          const res = await api.post('/auth/login', { email, password });
+          const { token, user } = res.data;
+          localStorage.setItem('crm_token', token);
+          set({ user, token, isLoading: false });
+        } catch (error) {
+          set({ isLoading: false });
+          throw error;
+        }
+      },
+
+      logout: () => {
+        localStorage.removeItem('crm_token');
+        localStorage.removeItem('crm_user');
+        set({ user: null, token: null });
+      },
+
+      setUser: (user) => set({ user }),
+    }),
+    {
+      name: 'crm_user',
+      partialize: (state) => ({ user: state.user, token: state.token }),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
+    }
+  )
+);
