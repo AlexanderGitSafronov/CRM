@@ -780,21 +780,20 @@ export const getCcPayroll = async (req: AuthRequest, res: Response) => {
         },
       });
 
-      // Upsell: sum from OrderHistory entries with action=UPSELL_ADDED, userId=op.id
-      const upsellEntries = await prisma.orderHistory.findMany({
+      // Upsell: sum OrderItems named 'Доп. продаж' on confirmed orders of this operator
+      const upsellItems = await prisma.orderItem.findMany({
         where: {
-          action: 'UPSELL_ADDED',
-          userId: op.id,
-          ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+          name: 'Доп. продаж',
+          order: {
+            managerId: op.id,
+            status: { in: ['CONFIRMED', 'SHIPPED', 'DELIVERED'] },
+            ...createdAtFilter,
+          },
         },
-        select: { newValue: true },
+        select: { price: true, quantity: true },
       });
 
-      // newValue format: "+{amount}"
-      const upsellAmount = upsellEntries.reduce((sum, e) => {
-        const val = parseFloat((e.newValue ?? '').replace('+', ''));
-        return sum + (isNaN(val) ? 0 : val);
-      }, 0);
+      const upsellAmount = upsellItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
 
       const confirmedBonus = confirmedOrders * CONFIRM_RATE;
       const upsellBonus = Math.round(upsellAmount * UPSELL_RATE * 100) / 100;

@@ -131,7 +131,7 @@ export default function CcPayrollPage() {
   const totalBalance = data?.operators.reduce((s, o) => s + o.balance, 0) ?? 0;
 
   return (
-    <div className="space-y-5">
+    <div className="p-4 sm:p-6 space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
