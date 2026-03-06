@@ -6,9 +6,11 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import fs from 'fs';
+import bcrypt from 'bcryptjs';
 import routes from './routes';
 import { errorHandler, notFound } from './middleware/errorHandler';
 import logger from './utils/logger';
+import prisma from './services/prisma';
 import { startNpTracker } from './workers/npTracker';
 import { startSlaTracker } from './workers/slaTracker';
 import { startCallbackReminder } from './workers/callbackReminder';
@@ -84,9 +86,33 @@ app.use('/api', routes);
 app.use(notFound);
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+async function seedIfEmpty() {
+  const count = await prisma.user.count();
+  if (count > 0) return;
+  logger.info('No users found — running initial seed...');
+  const hash = await bcrypt.hash('admin123', 10);
+  await prisma.user.create({
+    data: { name: 'Администратор', email: 'admin@crm.com', password: hash, role: 'ADMIN' },
+  });
+  await prisma.integration.createMany({
+    data: [
+      { type: 'TELEGRAM', name: 'Telegram Bot', config: JSON.stringify({ botToken: '', chatId: '' }), active: false },
+      { type: 'WEBHOOK', name: 'Webhook API', config: JSON.stringify({}), active: true },
+    ],
+    skipDuplicates: true,
+  });
+  await prisma.webhookToken.upsert({
+    where: { token: 'demo-webhook-token-change-in-production' },
+    update: {},
+    create: { name: 'Default Webhook', token: 'demo-webhook-token-change-in-production' },
+  });
+  logger.info('Seed complete. Admin: admin@crm.com / admin123');
+}
+
+app.listen(PORT, async () => {
   logger.info(`🚀 CRM Backend running on http://localhost:${PORT}`);
   logger.info(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+  await seedIfEmpty();
   startNpTracker();
   startSlaTracker();
   startCallbackReminder();
