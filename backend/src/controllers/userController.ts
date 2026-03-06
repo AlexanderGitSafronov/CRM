@@ -29,7 +29,7 @@ export const createUser = async (req: AuthRequest, res: Response) => {
     return res.status(400).json({ error: 'Name, email and password required' });
   }
 
-  const validRoles = ['ADMIN', 'MANAGER', 'VIEWER'];
+  const validRoles = ['ADMIN', 'MANAGER', 'VIEWER', 'CALL_CENTER'];
   if (!validRoles.includes(role)) {
     return res.status(400).json({ error: 'Invalid role' });
   }
