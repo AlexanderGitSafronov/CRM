@@ -22,6 +22,7 @@ model User {
   activityLogs ActivityLog[]
   notifications Notification[]
   callbacks    Callback[]
+  ccPayments   CcPayment[]
 
   @@map("users")
 }
@@ -196,4 +197,16 @@ model Callback {
   manager User? @relation(fields: [managerId], references: [id])
 
   @@map("callbacks")
+}
+
+model CcPayment {
+  id          String   @id @default(cuid())
+  operatorId  String
+  amount      Float
+  note        String?
+  createdAt   DateTime @default(now())
+
+  operator User @relation(fields: [operatorId], references: [id])
+
+  @@map("cc_payments")
 }

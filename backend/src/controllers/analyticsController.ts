@@ -746,6 +746,154 @@ export const getCcStats = async (req: AuthRequest, res: Response) => {
   });
 };
 
+// GET /api/analytics/cc-payroll
+// Расчёт зарплаты колл-центра: подтверждённые заказы × 10 + допродажи × 20%
+export const getCcPayroll = async (req: AuthRequest, res: Response) => {
+  const { dateFrom, dateTo } = req.query as Record<string, string>;
+
+  const dateFilter: Record<string, Date> = {};
+  if (dateFrom) dateFilter.gte = new Date(dateFrom);
+  if (dateTo) {
+    const end = new Date(dateTo);
+    end.setHours(23, 59, 59, 999);
+    dateFilter.lte = end;
+  }
+  const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
+
+  const CONFIRM_RATE = 10;    // грн за 1 підтверджений заказ
+  const UPSELL_RATE = 0.20;   // 20% від суми допродажу
+
+  // All CC operators
+  const operators = await prisma.user.findMany({
+    where: { role: { in: ['CALL_CENTER', 'ADMIN'] }, active: true },
+    select: { id: true, name: true },
+  });
+
+  const operatorStats = await Promise.all(
+    operators.map(async (op) => {
+      // Confirmed orders (includes CONFIRMED, SHIPPED, DELIVERED — тобто пройшли підтвердження)
+      const confirmedOrders = await prisma.order.count({
+        where: {
+          managerId: op.id,
+          status: { in: ['CONFIRMED', 'SHIPPED', 'DELIVERED'] },
+          ...createdAtFilter,
+        },
+      });
+
+      // Upsell: sum from OrderHistory entries with action=UPSELL_ADDED, userId=op.id
+      const upsellEntries = await prisma.orderHistory.findMany({
+        where: {
+          action: 'UPSELL_ADDED',
+          userId: op.id,
+          ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+        },
+        select: { newValue: true },
+      });
+
+      // newValue format: "+{amount}"
+      const upsellAmount = upsellEntries.reduce((sum, e) => {
+        const val = parseFloat((e.newValue ?? '').replace('+', ''));
+        return sum + (isNaN(val) ? 0 : val);
+      }, 0);
+
+      const confirmedBonus = confirmedOrders * CONFIRM_RATE;
+      const upsellBonus = Math.round(upsellAmount * UPSELL_RATE * 100) / 100;
+      const totalEarned = confirmedBonus + upsellBonus;
+
+      // Already paid
+      const paymentsResult = await prisma.ccPayment.aggregate({
+        where: { operatorId: op.id },
+        _sum: { amount: true },
+      });
+      const totalPaid = paymentsResult._sum.amount ?? 0;
+
+      // Recent payments list
+      const payments = await prisma.ccPayment.findMany({
+        where: { operatorId: op.id },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        select: { id: true, amount: true, note: true, createdAt: true },
+      });
+
+      return {
+        operatorId: op.id,
+        name: op.name,
+        confirmedOrders,
+        confirmedBonus,
+        upsellAmount: Math.round(upsellAmount * 100) / 100,
+        upsellBonus,
+        totalEarned,
+        totalPaid: Math.round(totalPaid * 100) / 100,
+        balance: Math.round((totalEarned - totalPaid) * 100) / 100,
+        payments,
+      };
+    }),
+  );
+
+  return res.json({
+    operators: operatorStats.filter((o) => o.confirmedOrders > 0 || o.totalPaid > 0).sort((a, b) => b.totalEarned - a.totalEarned),
+    rates: { confirmRate: CONFIRM_RATE, upsellRate: UPSELL_RATE },
+  });
+};
+
+// POST /api/analytics/cc-payroll
+// Зафіксувати виплату оператору
+export const createCcPayment = async (req: AuthRequest, res: Response) => {
+  const { operatorId, amount, note } = req.body;
+
+  if (!operatorId || !amount || parseFloat(amount) <= 0) {
+    return res.status(400).json({ error: 'operatorId and positive amount required' });
+  }
+
+  const operator = await prisma.user.findUnique({ where: { id: operatorId } });
+  if (!operator) {
+    return res.status(404).json({ error: 'Operator not found' });
+  }
+
+  const payment = await prisma.ccPayment.create({
+    data: {
+      operatorId,
+      amount: parseFloat(amount),
+      note: note?.trim() || null,
+    },
+  });
+
+  await logActivity({
+    userId: req.user?.id,
+    action: 'CC_PAYMENT_CREATED',
+    entityType: 'CcPayment',
+    entityId: payment.id,
+    details: `${operator.name}: ${payment.amount} грн`,
+    ip: req.ip,
+  });
+
+  return res.status(201).json(payment);
+};
+
+// DELETE /api/analytics/cc-payroll/:id
+// Скасувати виплату
+export const deleteCcPayment = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+
+  const payment = await prisma.ccPayment.findUnique({ where: { id } });
+  if (!payment) {
+    return res.status(404).json({ error: 'Payment not found' });
+  }
+
+  await prisma.ccPayment.delete({ where: { id } });
+
+  await logActivity({
+    userId: req.user?.id,
+    action: 'CC_PAYMENT_DELETED',
+    entityType: 'CcPayment',
+    entityId: id,
+    details: `${payment.amount} грн`,
+    ip: req.ip,
+  });
+
+  return res.json({ message: 'Payment deleted' });
+};
+
 // GET /api/analytics/kpi
 // Ключевые метрики для дашборда: сегодня, 30 дней, redemption rate, в пути
 export const getKpi = async (_req: AuthRequest, res: Response) => {

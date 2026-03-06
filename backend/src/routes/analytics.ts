@@ -14,6 +14,9 @@ import {
   getExpenses,
   createExpense,
   deleteExpense,
+  getCcPayroll,
+  createCcPayment,
+  deleteCcPayment,
 } from '../controllers/analyticsController';
 import { authenticate, requireRole } from '../middleware/auth';
 
@@ -34,5 +37,8 @@ router.get('/cc-stats', getCcStats);
 router.get('/expenses', getExpenses);
 router.post('/expenses', requireRole('ADMIN', 'MANAGER'), createExpense);
 router.delete('/expenses/:id', requireRole('ADMIN'), deleteExpense);
+router.get('/cc-payroll', requireRole('ADMIN'), getCcPayroll);
+router.post('/cc-payroll', requireRole('ADMIN'), createCcPayment);
+router.delete('/cc-payroll/:id', requireRole('ADMIN'), deleteCcPayment);
 
 export default router;

@@ -15,6 +15,7 @@ import {
   LogOut,
   X,
   Zap,
+  Wallet,
 } from 'lucide-react';
 
 interface NavItem {
@@ -31,6 +32,7 @@ const navItems: NavItem[] = [
   { href: '/customers', label: 'Клиенты', icon: Users },
   { href: '/products', label: 'Товары', icon: Package },
   { href: '/analytics', label: 'Аналитика', icon: TrendingUp, roles: ['ADMIN', 'MANAGER'] },
+  { href: '/analytics/cc-payroll', label: 'Зарплата КЦ', icon: Wallet, roles: ['ADMIN'] },
   { href: '/notifications', label: 'Уведомления', icon: Bell },
   { href: '/settings', label: 'Настройки', icon: Settings, roles: ['ADMIN'] },
 ];
@@ -87,7 +89,9 @@ export default function Sidebar({ open, onClose, unreadNotifications = 0 }: Side
         <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
           {filteredItems.map((item) => {
             const Icon = item.icon;
-            const isActive = pathname.startsWith(item.href);
+            const isActive = item.href === '/analytics'
+              ? pathname === '/analytics' || (pathname.startsWith('/analytics') && pathname !== '/analytics/cc-payroll')
+              : pathname.startsWith(item.href);
             const badge = item.href === '/notifications' ? unreadNotifications : 0;
 
             return (
