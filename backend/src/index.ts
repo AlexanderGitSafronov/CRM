@@ -38,7 +38,7 @@ if (!fs.existsSync(logsDir)) {
 
 // Security middleware
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: 'same-site' },
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
   contentSecurityPolicy: false, // Managed separately for API server
 }));
 
