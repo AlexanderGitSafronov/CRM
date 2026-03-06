@@ -126,6 +126,8 @@ export default function Sidebar({ open, onClose, unreadNotifications = 0 }: Side
                   ? 'Администратор'
                   : user?.role === 'MANAGER'
                   ? 'Менеджер'
+                  : user?.role === 'CALL_CENTER'
+                  ? 'Колл-центр'
                   : 'Просмотр'}
               </p>
             </div>

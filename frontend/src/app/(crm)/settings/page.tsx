@@ -356,11 +356,12 @@ export default function SettingsPage() {
     setTestingTelegram(false);
   };
 
-  const ROLE_LABELS = { ADMIN: 'Администратор', MANAGER: 'Менеджер', VIEWER: 'Просмотр' };
+  const ROLE_LABELS = { ADMIN: 'Администратор', MANAGER: 'Менеджер', VIEWER: 'Просмотр', CALL_CENTER: 'Колл-центр' };
   const ROLE_COLORS = {
     ADMIN: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
     MANAGER: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
     VIEWER: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400',
+    CALL_CENTER: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
   };
 
   const apiUrl = typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:3001` : 'http://localhost:3001';
@@ -906,6 +907,7 @@ export default function SettingsPage() {
               <option value="ADMIN">Администратор</option>
               <option value="MANAGER">Менеджер</option>
               <option value="VIEWER">Просмотр</option>
+              <option value="CALL_CENTER">Колл-центр</option>
             </select>
           </div>
           <div className="flex gap-3 pt-2">
