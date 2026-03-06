@@ -85,6 +85,68 @@ export const exportOrders = async (req: AuthRequest, res: Response) => {
   return res.send('\uFEFF' + csv);
 };
 
+// GET /api/export/finances — CSV export of expenses + delivered revenue
+export const exportFinances = async (req: AuthRequest, res: Response) => {
+  const { dateFrom, dateTo } = req.query as Record<string, string>;
+
+  const dateFilter: Record<string, Date> = {};
+  if (dateFrom) dateFilter.gte = new Date(dateFrom);
+  if (dateTo) {
+    const end = new Date(dateTo);
+    end.setHours(23, 59, 59, 999);
+    dateFilter.lte = end;
+  }
+  const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
+  const dateRangeFilter = Object.keys(dateFilter).length ? { date: dateFilter } : {};
+
+  const [expenses, deliveredOrders] = await Promise.all([
+    prisma.expense.findMany({
+      where: dateRangeFilter,
+      orderBy: { date: 'desc' },
+    }),
+    prisma.order.findMany({
+      where: { ...createdAtFilter, status: 'DELIVERED' },
+      select: { orderNum: true, total: true, createdAt: true, source: true, customer: { select: { name: true } } },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ]);
+
+  const EXPENSE_LABELS: Record<string, string> = {
+    ADVERTISING: 'Реклама', SERVICES: 'Услуги', PURCHASE: 'Закупка', OTHER: 'Прочее',
+  };
+
+  const expenseRows = expenses.map((e) => ({
+    'Тип': 'Расход',
+    'Дата': new Date(e.date).toLocaleDateString('uk-UA'),
+    'Категория/Источник': EXPENSE_LABELS[e.category] || e.category,
+    'Описание': e.description || '',
+    'Сумма': -e.amount,
+  }));
+
+  const revenueRows = deliveredOrders.map((o) => ({
+    'Тип': 'Доход',
+    'Дата': o.createdAt.toLocaleDateString('uk-UA'),
+    'Категория/Источник': o.source,
+    'Описание': `Замовлення #${o.orderNum} — ${o.customer.name}`,
+    'Сумма': o.total,
+  }));
+
+  const allRows = [...revenueRows, ...expenseRows].sort((a, b) =>
+    new Date(b['Дата']).getTime() - new Date(a['Дата']).getTime()
+  );
+
+  const totalRevenue = deliveredOrders.reduce((s, o) => s + o.total, 0);
+  const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
+  allRows.push({ 'Тип': '', 'Дата': '', 'Категория/Источник': 'ИТОГО ДОХОДОВ', 'Описание': '', 'Сумма': totalRevenue });
+  allRows.push({ 'Тип': '', 'Дата': '', 'Категория/Источник': 'ИТОГО РАСХОДОВ', 'Описание': '', 'Сумма': -totalExpenses });
+  allRows.push({ 'Тип': '', 'Дата': '', 'Категория/Источник': 'ЧИСТАЯ ПРИБЫЛЬ', 'Описание': '', 'Сумма': totalRevenue - totalExpenses });
+
+  const csv = stringify(allRows, { header: true, delimiter: ';' });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="finances_${new Date().toISOString().split('T')[0]}.csv"`);
+  return res.send('\uFEFF' + csv);
+};
+
 export const getActivityLogs = async (req: AuthRequest, res: Response) => {
   const { userId, action, entityType, page = '1', limit = '50' } = req.query as Record<string, string>;
 

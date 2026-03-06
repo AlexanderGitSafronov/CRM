@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../services/prisma';
 import { sendTelegramMessage } from '../services/telegram';
+import { sendSmsToCustomer, type TurboSmsChannel } from '../services/turbosms';
 import { authenticate, requireRole } from '../middleware/auth';
 
 const router = Router();
@@ -68,6 +69,31 @@ router.post('/telegram/test', async (req: Request, res: Response) => {
     return res.json({ success: true, message: 'Test message sent' });
   } else {
     return res.status(400).json({ success: false, error: 'Failed to send message. Check token and chat ID.' });
+  }
+});
+
+router.post('/turbosms/test', async (req: Request, res: Response) => {
+  const { token, senderName, channel, phone } = req.body as {
+    token: string;
+    senderName: string;
+    channel: TurboSmsChannel;
+    phone: string;
+  };
+
+  if (!token || !senderName || !phone) {
+    return res.status(400).json({ error: 'token, senderName, phone required' });
+  }
+
+  const ok = await sendSmsToCustomer(
+    phone,
+    `✅ Тестове повідомлення від CRM. Канал: ${channel ?? 'viber_sms'}`,
+    { token, senderName, channel: channel ?? 'viber_sms' },
+  );
+
+  if (ok) {
+    return res.json({ success: true, message: 'Повідомлення надіслано' });
+  } else {
+    return res.status(400).json({ success: false, error: 'Не вдалось надіслати. Перевірте токен та ім\'я відправника.' });
   }
 });
 

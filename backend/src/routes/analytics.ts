@@ -3,7 +3,14 @@ import {
   getSummary,
   getOrdersByDay,
   getRevenueByManager,
+  getConversionByManager,
+  getRevenueBySource,
   getRevenueByProduct,
+  getRedemptionRate,
+  getCancelReasons,
+  getCustomerLtv,
+  getKpi,
+  getCcStats,
   getExpenses,
   createExpense,
   deleteExpense,
@@ -16,7 +23,14 @@ router.use(authenticate);
 router.get('/summary', getSummary);
 router.get('/orders-by-day', getOrdersByDay);
 router.get('/revenue-by-manager', getRevenueByManager);
+router.get('/conversion-by-manager', getConversionByManager);
+router.get('/revenue-by-source', getRevenueBySource);
 router.get('/revenue-by-product', getRevenueByProduct);
+router.get('/redemption-rate', getRedemptionRate);
+router.get('/cancel-reasons', getCancelReasons);
+router.get('/customer-ltv', getCustomerLtv);
+router.get('/kpi', getKpi);
+router.get('/cc-stats', getCcStats);
 router.get('/expenses', getExpenses);
 router.post('/expenses', requireRole('ADMIN', 'MANAGER'), createExpense);
 router.delete('/expenses/:id', requireRole('ADMIN'), deleteExpense);

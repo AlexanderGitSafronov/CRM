@@ -17,8 +17,13 @@ import {
   Bot,
   Copy,
   CheckCircle,
+  Truck,
   Shield,
+  Package,
+  Loader2,
+  MessageSquare,
 } from 'lucide-react';
+import NovaPoshtaSelect from '@/components/nova-poshta/NovaPoshtaSelect';
 
 interface WebhookToken {
   id: string;
@@ -56,10 +61,73 @@ export default function SettingsPage() {
   const [webhookName, setWebhookName] = useState('');
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
 
+  // TurboSMS
+  const [turboConfig, setTurboConfig] = useState({
+    token: '',
+    senderName: '',
+    channel: 'viber_sms' as 'sms' | 'viber' | 'viber_sms',
+    active: false,
+  });
+  const [savingTurbo, setSavingTurbo] = useState(false);
+  const [testingTurbo, setTestingTurbo] = useState(false);
+  const [turboTestPhone, setTurboTestPhone] = useState('');
+
   // Telegram
   const [telegramConfig, setTelegramConfig] = useState({ botToken: '', chatId: '', active: false });
   const [savingTelegram, setSavingTelegram] = useState(false);
   const [testingTelegram, setTestingTelegram] = useState(false);
+
+  // NP Tracker status
+  interface TrackerStatus {
+    isRunning: boolean;
+    lastRun: string | null;
+    lastResult: { checked: number; updated: number; errors: number } | null;
+    nextRun: string | null;
+    pendingOrders: number;
+    schedule: string;
+  }
+  const [trackerStatus, setTrackerStatus] = useState<TrackerStatus | null>(null);
+  const [runningTracker, setRunningTracker] = useState(false);
+
+  const fetchTrackerStatus = async () => {
+    try {
+      const res = await api.get('/nova-poshta/tracker/status');
+      setTrackerStatus(res.data);
+    } catch {}
+  };
+
+  const handleRunTracker = async () => {
+    setRunningTracker(true);
+    try {
+      await api.post('/nova-poshta/tracker/run');
+      toast.success('Трекер запущено');
+      setTimeout(fetchTrackerStatus, 2000);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+      toast.error(msg);
+    }
+    setRunningTracker(false);
+  };
+
+  // Nova Poshta Sender
+  const [npConfig, setNpConfig] = useState({
+    apiKey: '',
+    senderPhone: '',
+    citySenderRef: '',
+    citySenderLabel: '',
+    senderAddressRef: '',
+    senderAddressLabel: '',
+    senderRef: '',
+    contactSenderRef: '',
+    active: false,
+  });
+  const [savingNp, setSavingNp] = useState(false);
+  const [fetchingNp, setFetchingNp] = useState(false);
+
+  useEffect(() => {
+    fetchTrackerStatus();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const fetch = async () => {
@@ -78,6 +146,31 @@ export default function SettingsPage() {
         if (tg) {
           const cfg = JSON.parse(tg.config);
           setTelegramConfig({ botToken: cfg.botToken || '', chatId: cfg.chatId || '', active: tg.active });
+        }
+        const turbo = ints.find((i) => i.type === 'TURBOSMS');
+        if (turbo) {
+          const cfg = JSON.parse(turbo.config);
+          setTurboConfig({
+            token: cfg.token || '',
+            senderName: cfg.senderName || '',
+            channel: cfg.channel || 'viber_sms',
+            active: turbo.active,
+          });
+        }
+        const np = ints.find((i) => i.type === 'NOVA_POSHTA_SENDER');
+        if (np) {
+          const cfg = JSON.parse(np.config);
+          setNpConfig({
+            apiKey: cfg.apiKey || '',
+            senderPhone: cfg.senderPhone || '',
+            citySenderRef: cfg.citySenderRef || '',
+            citySenderLabel: cfg.citySenderLabel || '',
+            senderAddressRef: cfg.senderAddressRef || '',
+            senderAddressLabel: cfg.senderAddressLabel || '',
+            senderRef: cfg.senderRef || '',
+            contactSenderRef: cfg.contactSenderRef || '',
+            active: np.active,
+          });
         }
       } catch {}
       setLoading(false);
@@ -152,6 +245,86 @@ export default function SettingsPage() {
     setCopiedToken(token);
     setTimeout(() => setCopiedToken(null), 2000);
     toast.success('Скопировано');
+  };
+
+  const handleFetchNpSender = async () => {
+    if (!npConfig.citySenderRef || !npConfig.senderAddressRef) {
+      toast.error('Спочатку виберіть місто та відділення відправника');
+      return;
+    }
+    setFetchingNp(true);
+    try {
+      const res = await api.post('/nova-poshta/fetch-sender', {
+        phone: npConfig.senderPhone,
+        cityRef: npConfig.citySenderRef,
+        warehouseRef: npConfig.senderAddressRef,
+      });
+      setNpConfig((p) => ({
+        ...p,
+        senderRef: res.data.senderRef,
+        contactSenderRef: res.data.contactSenderRef,
+      }));
+      toast.success(`Знайдено: ${res.data.senderName}`);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+      toast.error(msg);
+    }
+    setFetchingNp(false);
+  };
+
+  const handleSaveNpSender = async () => {
+    setSavingNp(true);
+    try {
+      await api.put('/integrations/NOVA_POSHTA_SENDER', {
+        config: {
+          apiKey: npConfig.apiKey,
+          senderPhone: npConfig.senderPhone,
+          citySenderRef: npConfig.citySenderRef,
+          citySenderLabel: npConfig.citySenderLabel,
+          senderAddressRef: npConfig.senderAddressRef,
+          senderAddressLabel: npConfig.senderAddressLabel,
+          senderRef: npConfig.senderRef,
+          contactSenderRef: npConfig.contactSenderRef,
+        },
+        active: npConfig.active,
+      });
+      toast.success('Налаштування відправника НП збережено');
+    } catch {
+      toast.error('Помилка');
+    }
+    setSavingNp(false);
+  };
+
+  const handleSaveTurbo = async () => {
+    setSavingTurbo(true);
+    try {
+      await api.put('/integrations/TURBOSMS', {
+        config: { token: turboConfig.token, senderName: turboConfig.senderName, channel: turboConfig.channel },
+        active: turboConfig.active,
+      });
+      toast.success('Налаштування TurboSMS збережено');
+    } catch {
+      toast.error('Помилка');
+    }
+    setSavingTurbo(false);
+  };
+
+  const handleTestTurbo = async () => {
+    if (!turboTestPhone) { toast.error('Введіть номер телефону для тесту'); return; }
+    setTestingTurbo(true);
+    try {
+      await api.post('/integrations/turbosms/test', {
+        token: turboConfig.token,
+        senderName: turboConfig.senderName,
+        channel: turboConfig.channel,
+        phone: turboTestPhone,
+      });
+      toast.success('Тестове повідомлення надіслано!');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+      toast.error(msg);
+    }
+    setTestingTurbo(false);
   };
 
   const handleSaveTelegram = async () => {
@@ -371,6 +544,95 @@ export default function SettingsPage() {
       {/* Integrations tab */}
       {activeTab === 'integrations' && (
         <div className="space-y-4">
+          {/* TurboSMS */}
+          <div className="card p-5">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-violet-500 flex items-center justify-center">
+                <MessageSquare className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 className="font-semibold text-gray-900 dark:text-white">TurboSMS — SMS / Viber клієнтам</h2>
+                <p className="text-xs text-gray-400">Повідомлення клієнту при відправці (ТТН створено)</p>
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <div
+                    className={`relative w-10 h-5 rounded-full transition-colors ${turboConfig.active ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                    onClick={() => setTurboConfig((p) => ({ ...p, active: !p.active }))}
+                  >
+                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${turboConfig.active ? 'translate-x-5' : ''}`} />
+                  </div>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
+                    {turboConfig.active ? 'Увімкнено' : 'Вимкнено'}
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="label">API токен TurboSMS</label>
+                <input
+                  className="input font-mono text-sm"
+                  type="password"
+                  value={turboConfig.token}
+                  onChange={(e) => setTurboConfig((p) => ({ ...p, token: e.target.value }))}
+                  placeholder="Ваш токен з turbosms.ua"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Особистий кабінет → API → Генерувати токен
+                </p>
+              </div>
+              <div>
+                <label className="label">Ім&apos;я відправника</label>
+                <input
+                  className="input"
+                  value={turboConfig.senderName}
+                  onChange={(e) => setTurboConfig((p) => ({ ...p, senderName: e.target.value }))}
+                  placeholder="MyShop"
+                  maxLength={11}
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Зареєстрований альфа-ім&apos;я (до 11 символів латиниці)
+                </p>
+              </div>
+              <div>
+                <label className="label">Канал доставки</label>
+                <select
+                  className="input"
+                  value={turboConfig.channel}
+                  onChange={(e) => setTurboConfig((p) => ({ ...p, channel: e.target.value as typeof turboConfig.channel }))}
+                >
+                  <option value="viber_sms">Viber → SMS (рекомендовано)</option>
+                  <option value="viber">Тільки Viber</option>
+                  <option value="sms">Тільки SMS</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-4 flex-wrap">
+              <button onClick={handleSaveTurbo} disabled={savingTurbo} className="btn-primary">
+                {savingTurbo ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : 'Зберегти'}
+              </button>
+              <input
+                className="input w-40 text-sm"
+                value={turboTestPhone}
+                onChange={(e) => setTurboTestPhone(e.target.value)}
+                placeholder="+380501234567"
+              />
+              <button
+                onClick={handleTestTurbo}
+                disabled={testingTurbo || !turboConfig.token || !turboConfig.senderName}
+                className="btn-secondary"
+              >
+                {testingTurbo ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400" /> : 'Тест'}
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mt-2">
+              Повідомлення відправляється автоматично після створення ТТН
+            </p>
+          </div>
+
           {/* Telegram */}
           <div className="card p-5">
             <div className="flex items-center gap-3 mb-4">
@@ -440,6 +702,161 @@ export default function SettingsPage() {
                 {testingTelegram ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400" /> : 'Тест'}
               </button>
             </div>
+          </div>
+
+          {/* Nova Poshta Sender */}
+          <div className="card p-5">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-red-500 flex items-center justify-center">
+                <Package className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 className="font-semibold text-gray-900 dark:text-white">Нова Пошта — відправник</h2>
+                <p className="text-xs text-gray-400">Дані відправника для авто-створення ТТН</p>
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <div
+                    className={`relative w-10 h-5 rounded-full transition-colors ${npConfig.active ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                    onClick={() => setNpConfig((p) => ({ ...p, active: !p.active }))}
+                  >
+                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${npConfig.active ? 'translate-x-5' : ''}`} />
+                  </div>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
+                    {npConfig.active ? 'Увімкнено' : 'Вимкнено'}
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="label">API ключ НП</label>
+                <input
+                  className="input font-mono text-sm"
+                  type="password"
+                  value={npConfig.apiKey}
+                  onChange={(e) => setNpConfig((p) => ({ ...p, apiKey: e.target.value }))}
+                  placeholder="Ваш API ключ з особистого кабінету НП"
+                />
+              </div>
+              <div>
+                <label className="label">Телефон відправника</label>
+                <input
+                  className="input"
+                  value={npConfig.senderPhone}
+                  onChange={(e) => setNpConfig((p) => ({ ...p, senderPhone: e.target.value }))}
+                  placeholder="+380501234567"
+                />
+              </div>
+              <div>
+                <label className="label">Місто відправки (звідки відправляєте)</label>
+                <NovaPoshtaSelect
+                  cityValue={npConfig.citySenderLabel}
+                  addressValue={npConfig.senderAddressLabel}
+                  onCityChange={(label) => setNpConfig((p) => ({ ...p, citySenderLabel: label }))}
+                  onAddressChange={(label) => setNpConfig((p) => ({ ...p, senderAddressLabel: label }))}
+                  onCityRefChange={(ref) => setNpConfig((p) => ({ ...p, citySenderRef: ref }))}
+                  onWarehouseRefChange={(ref) => setNpConfig((p) => ({ ...p, senderAddressRef: ref }))}
+                />
+              </div>
+              {npConfig.senderRef && (
+                <div className="text-xs text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-950/30 px-3 py-2 rounded-lg">
+                  Відправника знайдено ✓ (ref: {npConfig.senderRef.slice(0, 8)}...)
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={handleFetchNpSender}
+                disabled={fetchingNp || !npConfig.citySenderRef || !npConfig.senderAddressRef}
+                className="btn-secondary"
+              >
+                {fetchingNp ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                Знайти відправника в НП
+              </button>
+              <button
+                onClick={handleSaveNpSender}
+                disabled={savingNp || !npConfig.senderRef}
+                className="btn-primary"
+              >
+                {savingNp ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : 'Зберегти'}
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mt-2">
+              Крок 1: введіть API ключ, телефон та виберіть відділення звідки відправляєте. Крок 2: натисніть «Знайти відправника» — система автоматично знайде ваш акаунт у НП. Крок 3: збережіть.
+            </p>
+          </div>
+
+          {/* NP Tracker status */}
+          <div className="card p-5">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500 flex items-center justify-center">
+                <Truck className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 className="font-semibold text-gray-900 dark:text-white">Авто-трекінг ТТН</h2>
+                <p className="text-xs text-gray-400">
+                  Автоматично оновлює статус замовлень за даними НП
+                  {trackerStatus ? ` · Розклад: ${trackerStatus.schedule}` : ''}
+                </p>
+              </div>
+            </div>
+
+            {trackerStatus ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3">
+                    <p className="text-xs text-gray-500 mb-1">Очікує трекінгу</p>
+                    <p className="text-xl font-bold text-gray-900 dark:text-white">{trackerStatus.pendingOrders}</p>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3">
+                    <p className="text-xs text-gray-500 mb-1">Остання перевірка</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">
+                      {trackerStatus.lastRun
+                        ? new Date(trackerStatus.lastRun).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                        : 'Ще не було'}
+                    </p>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3">
+                    <p className="text-xs text-gray-500 mb-1">Наступна</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">
+                      {trackerStatus.nextRun
+                        ? new Date(trackerStatus.nextRun).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                        : '—'}
+                    </p>
+                  </div>
+                </div>
+                {trackerStatus.lastResult && (
+                  <div className="text-xs text-gray-500 bg-gray-50 dark:bg-gray-800/50 rounded-lg px-3 py-2">
+                    Останній запуск: перевірено <b>{trackerStatus.lastResult.checked}</b> · оновлено <b className="text-green-600">{trackerStatus.lastResult.updated}</b>
+                    {trackerStatus.lastResult.errors > 0 && <span className="text-red-500"> · помилок {trackerStatus.lastResult.errors}</span>}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400">Завантаження...</p>
+            )}
+
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={handleRunTracker}
+                disabled={runningTracker || trackerStatus?.isRunning}
+                className="btn-primary"
+              >
+                {(runningTracker || trackerStatus?.isRunning)
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Виконується...</>
+                  : <><Truck className="w-4 h-4" /> Запустити зараз</>
+                }
+              </button>
+              <button onClick={fetchTrackerStatus} className="btn-secondary">
+                Оновити статус
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mt-2">
+              Змінити розклад: встановіть змінну NP_TRACKER_CRON у .env (за замовчуванням: кожні 3 години)
+            </p>
           </div>
 
           {/* Facebook placeholder */}

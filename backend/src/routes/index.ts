@@ -11,6 +11,8 @@ import exportRoutes from './export';
 import integrationRoutes from './integrations';
 import eventsRoutes from './events';
 import novaPoshtaRoutes from './nova-poshta';
+import callbackRoutes from './callbacks';
+import telegramRoutes from './telegram';
 
 const router = Router();
 
@@ -26,5 +28,7 @@ router.use('/notifications', notificationRoutes);
 router.use('/export', exportRoutes);
 router.use('/integrations', integrationRoutes);
 router.use('/nova-poshta', novaPoshtaRoutes);
+router.use('/callbacks', callbackRoutes);
+router.use('/telegram', telegramRoutes);
 
 export default router;

@@ -1,32 +1,57 @@
-version: '3.8'
+version: '3.9'
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crmdb}
+      POSTGRES_USER: ${POSTGRES_USER:-crmuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crmuser} -d ${POSTGRES_DB:-crmdb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-crmuser}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-crmdb}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      PORT: 3001
+      NODE_ENV: production
+      CORS_ORIGIN: ${FRONTEND_URL:-http://localhost:3000}
+      NP_API_KEY: ${NP_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TURBOSMS_TOKEN: ${TURBOSMS_TOKEN:-}
     ports:
       - "3001:3001"
-    environment:
-      - DATABASE_URL=file:./dev.db
-      - JWT_SECRET=change-this-in-production
-      - NODE_ENV=production
-      - CORS_ORIGIN=http://localhost:3000
-    volumes:
-      - backend_data:/app/prisma
-    restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:3001
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+    restart: unless-stopped
     depends_on:
       - backend
-    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+    ports:
+      - "3000:3000"
 
 volumes:
-  backend_data:
+  postgres_data:

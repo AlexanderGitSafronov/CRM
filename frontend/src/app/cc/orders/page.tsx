@@ -9,6 +9,13 @@ import { ORDER_STATUS_LABELS, type Order, type OrderStatus } from '@/types';
 import { Search, Phone, ChevronRight, RefreshCw, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+const SLA_HOURS = 2;
+
+function isOverdueSla(order: Order): boolean {
+  if (order.status !== 'NEW') return false;
+  return Date.now() - new Date(order.createdAt).getTime() > SLA_HOURS * 60 * 60 * 1000;
+}
+
 const CC_FILTERS: { label: string; value: string }[] = [
   { label: 'Все', value: 'ALL' },
   { label: 'Новые', value: 'NEW' },
@@ -121,16 +128,24 @@ export default function CcOrdersPage() {
         </div>
       ) : (
         <div className="space-y-2">
-          {orders.map((order) => (
+          {orders.map((order) => {
+            const overdue = isOverdueSla(order);
+            return (
             <Link
               key={order.id}
               href={`/cc/orders/${order.id}`}
-              className="card flex items-center gap-4 p-4 hover:shadow-md transition-shadow group"
+              className={cn(
+                'card flex items-center gap-4 p-4 hover:shadow-md transition-shadow group',
+                overdue && 'border-red-200 dark:border-red-800 bg-red-50/60 dark:bg-red-900/10',
+              )}
             >
               {/* Order number */}
               <div className="shrink-0 w-14 text-center">
                 <p className="text-xs text-gray-400">№</p>
-                <p className="font-bold text-gray-900 dark:text-white">#{order.orderNum}</p>
+                <div className="flex items-center justify-center gap-1">
+                  <p className="font-bold text-gray-900 dark:text-white">#{order.orderNum}</p>
+                  {overdue && <Clock className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />}
+                </div>
               </div>
 
               <div className="w-px h-10 bg-gray-100 dark:bg-gray-700 shrink-0" />
@@ -159,7 +174,8 @@ export default function CcOrdersPage() {
 
               <ChevronRight className="w-4 h-4 text-gray-300 dark:text-gray-600 shrink-0 group-hover:text-gray-500 transition-colors" />
             </Link>
-          ))}
+            );
+          })}
         </div>
       )}
 

@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -21,20 +21,23 @@ model User {
   orders       Order[]
   activityLogs ActivityLog[]
   notifications Notification[]
+  callbacks    Callback[]
 
   @@map("users")
 }
 
 model Customer {
-  id        String   @id @default(cuid())
-  name      String
-  phone     String   @unique
-  email     String?
-  address   String?
-  city      String?
-  notes     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(cuid())
+  name           String
+  phone          String   @unique
+  email          String?
+  address        String?
+  city           String?
+  notes          String?
+  isBlacklisted  Boolean  @default(false)
+  blacklistReason String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   orders Order[]
 
@@ -72,6 +75,10 @@ model Order {
   deliveryCity      String?
   deliveryAddress   String?
   recipientName     String?
+  npCityRef         String?     // Nova Poshta city ref (for TTN creation)
+  npWarehouseRef    String?     // Nova Poshta warehouse ref (for TTN creation)
+  trackingNumber    String?     // Nova Poshta TTN
+  cancelReason      String?     // Reason for cancellation (call center)
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
@@ -79,6 +86,7 @@ model Order {
   manager    User?       @relation(fields: [managerId], references: [id])
   items      OrderItem[]
   history    OrderHistory[]
+  callbacks  Callback[]
 
   @@map("orders")
 }
@@ -172,4 +180,20 @@ model WebhookToken {
   createdAt DateTime @default(now())
 
   @@map("webhook_tokens")
+}
+
+model Callback {
+  id          String    @id @default(cuid())
+  orderId     String
+  managerId   String?
+  scheduledAt DateTime
+  note        String?
+  done        Boolean   @default(false)
+  doneAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  manager User? @relation(fields: [managerId], references: [id])
+
+  @@map("callbacks")
 }

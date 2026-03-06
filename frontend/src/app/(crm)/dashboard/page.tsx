@@ -16,6 +16,9 @@ import {
   Bell,
   Clock,
   RefreshCw,
+  Truck,
+  PhoneCall,
+  PercentCircle,
 } from 'lucide-react';
 import {
   LineChart,
@@ -36,9 +39,22 @@ interface DayData {
   revenue: number;
 }
 
+interface Kpi {
+  today: { orders: number; revenue: number };
+  month: { orders: number; revenue: number; expenses: number; profit: number };
+  inTransit: number;
+  newOrders: number;
+  redemptionRate: number | null;
+  delivered30: number;
+  returned30: number;
+  pendingCallbacks: number;
+  weeklyOrders: number;
+}
+
 export default function DashboardPage() {
   const { user } = useAuthStore();
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  const [kpi, setKpi] = useState<Kpi | null>(null);
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
   const [chartData, setChartData] = useState<DayData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,14 +64,16 @@ export default function DashboardPage() {
   const loadData = async (silent = false) => {
     if (!silent) setRefreshing(true);
     try {
-      const [analyticsRes, ordersRes, chartRes] = await Promise.all([
+      const [analyticsRes, ordersRes, chartRes, kpiRes] = await Promise.all([
         api.get('/analytics/summary'),
         api.get('/orders', { params: { limit: 5, sortBy: 'createdAt', sortOrder: 'desc' } }),
         api.get('/analytics/orders-by-day', { params: { days: 14 } }),
+        api.get('/analytics/kpi'),
       ]);
       setAnalytics(analyticsRes.data);
       setRecentOrders(ordersRes.data.orders);
       setChartData(chartRes.data);
+      setKpi(kpiRes.data);
       setLastUpdated(new Date());
     } catch {}
     setLoading(false);
@@ -153,6 +171,57 @@ export default function DashboardPage() {
           </button>
         </div>
       </div>
+
+      {/* KPI Strip */}
+      {kpi && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="card p-4 flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center shrink-0">
+              <ShoppingCart className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Сегодня заказов</p>
+              <p className="text-xl font-bold text-gray-900 dark:text-white">{kpi.today.orders}</p>
+              <p className="text-xs text-gray-400">{formatCurrency(kpi.today.revenue)}</p>
+            </div>
+          </div>
+
+          <div className="card p-4 flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-orange-50 dark:bg-orange-900/20 flex items-center justify-center shrink-0">
+              <Truck className="w-4 h-4 text-orange-600 dark:text-orange-400" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">В пути</p>
+              <p className="text-xl font-bold text-gray-900 dark:text-white">{kpi.inTransit}</p>
+              <p className="text-xs text-gray-400">посылок</p>
+            </div>
+          </div>
+
+          <div className="card p-4 flex items-center gap-3">
+            <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${kpi.redemptionRate !== null && kpi.redemptionRate >= 70 ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20'}`}>
+              <PercentCircle className={`w-4 h-4 ${kpi.redemptionRate !== null && kpi.redemptionRate >= 70 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`} />
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Выкуп (30д)</p>
+              <p className="text-xl font-bold text-gray-900 dark:text-white">
+                {kpi.redemptionRate !== null ? `${kpi.redemptionRate}%` : '—'}
+              </p>
+              <p className="text-xs text-gray-400">{kpi.delivered30}д / {kpi.returned30}в</p>
+            </div>
+          </div>
+
+          <div className="card p-4 flex items-center gap-3">
+            <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${kpi.pendingCallbacks > 0 ? 'bg-amber-50 dark:bg-amber-900/20' : 'bg-gray-50 dark:bg-gray-800'}`}>
+              <PhoneCall className={`w-4 h-4 ${kpi.pendingCallbacks > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400'}`} />
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Перезвони</p>
+              <p className="text-xl font-bold text-gray-900 dark:text-white">{kpi.pendingCallbacks}</p>
+              <p className="text-xs text-gray-400">до завтра</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">

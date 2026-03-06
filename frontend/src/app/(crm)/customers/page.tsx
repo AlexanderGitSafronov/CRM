@@ -6,7 +6,7 @@ import api from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import Pagination from '@/components/ui/Pagination';
 import type { Customer, Pagination as PaginationType } from '@/types';
-import { Search, Users, Phone, Mail, MapPin, TrendingUp, RefreshCw, X } from 'lucide-react';
+import { Search, Users, Phone, Mail, MapPin, TrendingUp, RefreshCw, X, ShieldAlert } from 'lucide-react';
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -109,9 +109,16 @@ export default function CustomersPage() {
                           </span>
                         </div>
                         <div>
-                          <p className="font-medium text-gray-900 dark:text-white group-hover:text-primary-600 transition-colors">
-                            {customer.name}
-                          </p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="font-medium text-gray-900 dark:text-white group-hover:text-primary-600 transition-colors">
+                              {customer.name}
+                            </p>
+                            {customer.isBlacklisted && (
+                              <span className="inline-flex items-center gap-0.5 text-xs font-medium bg-red-100 dark:bg-red-950 text-red-600 dark:text-red-400 px-1.5 py-0.5 rounded-full">
+                                <ShieldAlert className="w-2.5 h-2.5" />
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-gray-400">{customer.phone}</p>
                         </div>
                       </Link>

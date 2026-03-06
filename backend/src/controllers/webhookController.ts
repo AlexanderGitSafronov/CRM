@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import prisma from '../services/prisma';
 import { notifyNewOrder, logActivity } from '../services/notifications';
 import { broadcastEvent } from '../services/eventBus';
+import { getNextManagerId } from '../services/roundRobin';
 
 export const receiveOrder = async (req: Request, res: Response) => {
   // Validate webhook token
@@ -22,7 +23,7 @@ export const receiveOrder = async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'Invalid webhook token' });
   }
 
-  const { customer, items, source = 'WEBHOOK', comment } = req.body;
+  const { customer, items, source = 'WEBHOOK', comment, delivery } = req.body;
 
   if (!customer?.name || !customer?.phone) {
     return res.status(400).json({ error: 'customer.name and customer.phone required' });
@@ -49,6 +50,10 @@ export const receiveOrder = async (req: Request, res: Response) => {
     });
   }
 
+  const blacklistWarning = dbCustomer.isBlacklisted
+    ? `⚠️ ЧОРНИЙ СПИСОК: ${dbCustomer.blacklistReason || 'без причини'}`
+    : null;
+
   const total = items.reduce(
     (sum: number, item: { price: number; quantity: number }) => sum + item.price * item.quantity,
     0
@@ -57,13 +62,21 @@ export const receiveOrder = async (req: Request, res: Response) => {
   const lastOrder = await prisma.order.findFirst({ orderBy: { orderNum: 'desc' }, select: { orderNum: true } });
   const orderNum = (lastOrder?.orderNum ?? 0) + 1;
 
+  // Auto-assign manager via round-robin
+  const autoManagerId = await getNextManagerId();
+
   const order = await prisma.order.create({
     data: {
       orderNum,
       customerId: dbCustomer.id,
+      managerId: autoManagerId,
       source,
-      comment: comment?.trim() || null,
+      comment: [blacklistWarning, comment?.trim()].filter(Boolean).join('\n') || null,
       total,
+      deliveryService: delivery?.service?.trim() || null,
+      deliveryCity: delivery?.city?.trim() || null,
+      deliveryAddress: delivery?.address?.trim() || null,
+      recipientName: delivery?.recipientName?.trim() || null,
       items: {
         create: items.map((item: {
           name: string;
@@ -110,6 +123,7 @@ export const receiveOrder = async (req: Request, res: Response) => {
     success: true,
     orderId: order.id,
     orderNum: order.orderNum,
+    ...(blacklistWarning ? { blacklistWarning } : {}),
   });
 };
 

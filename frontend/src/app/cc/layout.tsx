@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
+import Link from 'next/link';
 import { useAuthStore } from '@/stores/authStore';
-import { Phone, LogOut, Zap, Bell, Volume2, VolumeX } from 'lucide-react';
+import { Phone, LogOut, Zap, Bell, Volume2, VolumeX, BarChart2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
+import { cn } from '@/lib/utils';
 
 let _audioCtx: AudioContext | null = null;
 
@@ -43,6 +45,7 @@ function playChime() {
 
 export default function CcLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const { user, _hasHydrated, logout } = useAuthStore();
   const [newOrdersCount, setNewOrdersCount] = useState(0);
   // Default OFF — first click on the icon enables sound AND unlocks AudioContext
@@ -151,6 +154,34 @@ export default function CcLayout({ children }: { children: React.ReactNode }) {
             <Phone className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
             <span className="text-xs font-medium text-teal-700 dark:text-teal-400">Колл-центр</span>
           </div>
+
+          {/* Nav tabs */}
+          <nav className="flex items-center gap-1 ml-4">
+            <Link
+              href="/cc/orders"
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                pathname === '/cc/orders' || pathname?.startsWith('/cc/orders/')
+                  ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-400'
+                  : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+              )}
+            >
+              <Phone className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Заказы</span>
+            </Link>
+            <Link
+              href="/cc/stats"
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                pathname === '/cc/stats'
+                  ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-400'
+                  : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+              )}
+            >
+              <BarChart2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Статистика</span>
+            </Link>
+          </nav>
 
           <div className="flex-1" />
 

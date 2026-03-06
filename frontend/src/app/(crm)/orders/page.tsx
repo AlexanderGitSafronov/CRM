@@ -25,7 +25,16 @@ import {
   ChevronDown,
   X,
   RefreshCw,
+  Clock,
+  Truck,
 } from 'lucide-react';
+
+const SLA_HOURS = 2;
+
+function isOverdueSla(order: Order): boolean {
+  if (order.status !== 'NEW') return false;
+  return Date.now() - new Date(order.createdAt).getTime() > SLA_HOURS * 60 * 60 * 1000;
+}
 
 const STATUSES: OrderStatus[] = [
   'NEW', 'PROCESSING', 'CONFIRMED', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'RETURNED',
@@ -95,6 +104,28 @@ export default function OrdersPage() {
     setSearch(value);
     clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => setPage(1), 400);
+  };
+
+  const [bulkTtnLoading, setBulkTtnLoading] = useState(false);
+
+  const handleBulkTtn = async () => {
+    if (!selected.length) return;
+    setBulkTtnLoading(true);
+    try {
+      const res = await api.post('/nova-poshta/bulk-create-ttn', {
+        orderIds: selected,
+        weight: 1,
+        description: 'Товар',
+        payerType: 'Recipient',
+      });
+      const { success, failed } = res.data as { success: number; failed: number };
+      toast.success(`ТТН: ${success} створено${failed ? `, ${failed} помилок` : ''}`);
+      setSelected([]);
+      fetchOrders();
+    } catch {
+      toast.error('Помилка масового TTN');
+    }
+    setBulkTtnLoading(false);
   };
 
   const handleBulkStatus = async () => {
@@ -302,6 +333,16 @@ export default function OrdersPage() {
               </div>
             )}
           </div>
+          {canEdit && (
+            <button
+              onClick={handleBulkTtn}
+              disabled={bulkTtnLoading}
+              className="btn-secondary text-sm flex items-center gap-1.5 text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-900/20"
+            >
+              <Truck className="w-3.5 h-3.5" />
+              {bulkTtnLoading ? 'Создание...' : 'Создать ТТН'}
+            </button>
+          )}
           <button
             onClick={() => setSelected([])}
             className="ml-auto text-sm text-gray-500 hover:text-gray-700"
@@ -367,10 +408,16 @@ export default function OrdersPage() {
                     </td>
                   </tr>
                 ) : (
-                  orders.map((order) => (
+                  orders.map((order) => {
+                    const overdue = isOverdueSla(order);
+                    return (
                     <tr
                       key={order.id}
-                      className="border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors"
+                      className={`border-b transition-colors ${
+                        overdue
+                          ? 'border-red-100 dark:border-red-900/40 bg-red-50/50 dark:bg-red-900/10 hover:bg-red-50 dark:hover:bg-red-900/20'
+                          : 'border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-800/30'
+                      }`}
                     >
                       <td className="p-3">
                         <input
@@ -381,12 +428,17 @@ export default function OrdersPage() {
                         />
                       </td>
                       <td className="p-3">
-                        <Link
-                          href={`/orders/${order.id}`}
-                          className="font-semibold text-primary-600 hover:underline text-sm"
-                        >
-                          #{order.orderNum}
-                        </Link>
+                        <div className="flex items-center gap-1">
+                          <Link
+                            href={`/orders/${order.id}`}
+                            className="font-semibold text-primary-600 hover:underline text-sm"
+                          >
+                            #{order.orderNum}
+                          </Link>
+                          {overdue && (
+                            <Clock className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
+                          )}
+                        </div>
                       </td>
                       <td className="p-3">
                         <div>
@@ -439,7 +491,8 @@ export default function OrdersPage() {
                         )}
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>

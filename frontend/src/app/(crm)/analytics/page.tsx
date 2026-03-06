@@ -18,6 +18,7 @@ import {
   Plus,
   Trash2,
   Calendar,
+  Download,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -37,7 +38,63 @@ import {
 
 interface DayData { date: string; orders: number; revenue: number }
 interface ManagerData { manager: string; revenue: number; orders: number }
-interface ProductData { name: string; revenue: number; quantity: number }
+interface ProductData {
+  name: string;
+  revenue: number;
+  quantity: number;
+  cost: number;
+  profit: number;
+  returned: number;
+  redemptionRate: number;
+}
+interface RedemptionData {
+  shipped: number;
+  delivered: number;
+  returned: number;
+  resolved: number;
+  redemptionRate: number | null;
+  prevRedemptionRate: number | null;
+  realRevenue: number;
+  avgOrderValue: number;
+}
+interface SourceData {
+  source: string;
+  label: string;
+  total: number;
+  converted: number;
+  cancelled: number;
+  revenue: number;
+  conversion: number;
+}
+
+interface ManagerConversion {
+  manager: string;
+  managerId: string;
+  total: number;
+  confirmed: number;
+  cancelled: number;
+  stillNew: number;
+  conversion: number;
+  avgResponseMinutes: number | null;
+}
+
+interface LtvCustomer {
+  id: string;
+  name: string;
+  phone: string;
+  ordersCount: number;
+  ltv: number;
+  avgOrder: number;
+  firstOrder: string | null;
+  lastOrder: string | null;
+}
+interface LtvData {
+  customers: LtvCustomer[];
+  repeatBuyers: number;
+  totalWithOrders: number;
+  repeatRate: number;
+  avgLtv: number;
+}
 
 const PIE_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#ef4444'];
 
@@ -56,6 +113,10 @@ export default function AnalyticsPage() {
   const [byDay, setByDay] = useState<DayData[]>([]);
   const [byManager, setByManager] = useState<ManagerData[]>([]);
   const [byProduct, setByProduct] = useState<ProductData[]>([]);
+  const [conversionByManager, setConversionByManager] = useState<ManagerConversion[]>([]);
+  const [bySource, setBySource] = useState<SourceData[]>([]);
+  const [redemption, setRedemption] = useState<RedemptionData | null>(null);
+  const [ltv, setLtv] = useState<LtvData | null>(null);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [totalExpenses, setTotalExpenses] = useState(0);
   const [summary, setSummary] = useState({ revenue: 0, orders: 0, profit: 0 });
@@ -83,18 +144,26 @@ export default function AnalyticsPage() {
     setLoading(true);
     const params = buildDateParams();
     try {
-      const [dayRes, managerRes, productRes, expenseRes, summaryRes] = await Promise.all([
+      const [dayRes, managerRes, conversionRes, sourceRes, productRes, expenseRes, summaryRes, redemptionRes, ltvRes] = await Promise.all([
         api.get('/analytics/orders-by-day', { params: { days: period } }),
         api.get('/analytics/revenue-by-manager', { params }),
-        api.get('/analytics/revenue-by-product', { params: { ...params, limit: 8 } }),
+        api.get('/analytics/conversion-by-manager', { params }),
+        api.get('/analytics/revenue-by-source', { params }),
+        api.get('/analytics/revenue-by-product', { params: { ...params, limit: 10 } }),
         api.get('/analytics/expenses', { params: { ...params, limit: 100 } }),
         api.get('/analytics/summary', { params }),
+        api.get('/analytics/redemption-rate', { params }),
+        api.get('/analytics/customer-ltv', { params: { ...params, limit: 15 } }),
       ]);
       setByDay(dayRes.data);
       setByManager(managerRes.data);
+      setConversionByManager(conversionRes.data);
+      setBySource(sourceRes.data);
       setByProduct(productRes.data);
       setExpenses(expenseRes.data.expenses);
       setTotalExpenses(expenseRes.data.total);
+      setRedemption(redemptionRes.data);
+      setLtv(ltvRes.data);
       const s = summaryRes.data;
       setSummary({ revenue: s.revenue, orders: s.orders.total, profit: s.profit });
     } catch {}
@@ -138,6 +207,23 @@ export default function AnalyticsPage() {
 
   const canEdit = user?.role !== 'VIEWER';
 
+  const handleExportFinances = async () => {
+    const params = buildDateParams();
+    const query = new URLSearchParams(params as Record<string, string>).toString();
+    const token = localStorage.getItem('token');
+    const res = await fetch(`/api/export/finances?${query}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) { toast.error('Ошибка экспорта'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `finances_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="p-4 sm:p-6 space-y-5">
       <div className="flex flex-wrap items-center gap-3">
@@ -157,6 +243,14 @@ export default function AnalyticsPage() {
           </select>
           <input type="date" className="input w-auto text-sm" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} title="От" />
           <input type="date" className="input w-auto text-sm" value={dateTo} onChange={(e) => setDateTo(e.target.value)} title="До" />
+          <button
+            onClick={handleExportFinances}
+            className="btn btn-secondary flex items-center gap-1.5 text-sm"
+            title="Экспорт финансов в CSV"
+          >
+            <Download className="w-4 h-4" />
+            Экспорт
+          </button>
         </div>
       </div>
 
@@ -197,6 +291,64 @@ export default function AnalyticsPage() {
           </div>
         </div>
       </div>
+
+      {/* Redemption rate block */}
+      {redemption && (
+        <div className="card p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <TrendingUp className="w-4 h-4 text-emerald-500" />
+            <h2 className="font-semibold text-gray-900 dark:text-white">% Выкупа посылок</h2>
+            <span className="text-xs text-gray-400 ml-1">(DELIVERED / DELIVERED + RETURNED)</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="text-center">
+              <p className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">
+                {redemption.redemptionRate !== null ? `${redemption.redemptionRate}%` : '—'}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">% выкупа</p>
+              {redemption.prevRedemptionRate !== null && (
+                <p className={`text-xs mt-0.5 font-medium ${
+                  (redemption.redemptionRate ?? 0) >= redemption.prevRedemptionRate
+                    ? 'text-emerald-500' : 'text-red-500'
+                }`}>
+                  {(redemption.redemptionRate ?? 0) >= redemption.prevRedemptionRate ? '↑' : '↓'}
+                  {' '}пред. {redemption.prevRedemptionRate}%
+                </p>
+              )}
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{redemption.delivered}</p>
+              <p className="text-xs text-gray-400 mt-1">Доставлено</p>
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-red-500">{redemption.returned}</p>
+              <p className="text-xs text-gray-400 mt-1">Возвратов</p>
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-amber-500">{redemption.shipped}</p>
+              <p className="text-xs text-gray-400 mt-1">В пути</p>
+            </div>
+          </div>
+          {redemption.resolved > 0 && (
+            <div className="mt-4">
+              <div className="flex justify-between text-xs text-gray-400 mb-1">
+                <span>Доставлено: {redemption.delivered}</span>
+                <span>Возвраты: {redemption.returned}</span>
+              </div>
+              <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden flex">
+                <div
+                  className="h-full bg-emerald-500 rounded-full transition-all"
+                  style={{ width: `${redemption.redemptionRate ?? 0}%` }}
+                />
+                <div
+                  className="h-full bg-red-400"
+                  style={{ width: `${100 - (redemption.redemptionRate ?? 0)}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Charts row 1 */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
@@ -290,30 +442,319 @@ export default function AnalyticsPage() {
           )}
         </div>
 
-        {/* By product */}
+      </div>
+
+      {/* Product ROI table */}
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <BarChart2 className="w-4 h-4 text-gray-400" />
+          <h2 className="font-semibold text-gray-900 dark:text-white">Товары: ROI и % выкупа</h2>
+        </div>
+        {loading ? (
+          <div className="h-[120px] flex items-center justify-center">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
+          </div>
+        ) : byProduct.length === 0 ? (
+          <p className="text-gray-400 text-sm text-center py-8">Нет данных</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-400 border-b border-gray-100 dark:border-gray-800">
+                  <th className="pb-2 pr-4 font-medium">Товар</th>
+                  <th className="pb-2 pr-4 font-medium text-right">Шт.</th>
+                  <th className="pb-2 pr-4 font-medium text-right">Выручка</th>
+                  <th className="pb-2 pr-4 font-medium text-right">Прибыль</th>
+                  <th className="pb-2 pr-4 font-medium text-right">ROI</th>
+                  <th className="pb-2 font-medium text-right">% Выкупа</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
+                {byProduct.map((p, i) => {
+                  const roi = p.cost > 0 ? Math.round((p.profit / p.cost) * 100) : null;
+                  return (
+                    <tr key={i} className="text-gray-700 dark:text-gray-300">
+                      <td className="py-2 pr-4 font-medium max-w-[180px] truncate">{p.name}</td>
+                      <td className="py-2 pr-4 text-right text-gray-500">{p.quantity}</td>
+                      <td className="py-2 pr-4 text-right">{formatCurrency(p.revenue)}</td>
+                      <td className={`py-2 pr-4 text-right font-semibold ${p.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+                        {p.cost > 0 ? formatCurrency(p.profit) : '—'}
+                      </td>
+                      <td className="py-2 pr-4 text-right">
+                        {roi !== null ? (
+                          <span className={`font-bold ${roi >= 100 ? 'text-emerald-600' : roi >= 30 ? 'text-amber-500' : 'text-red-500'}`}>
+                            {roi}%
+                          </span>
+                        ) : <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="py-2 text-right">
+                        <span className={`font-semibold ${p.redemptionRate >= 70 ? 'text-emerald-600' : p.redemptionRate >= 50 ? 'text-amber-500' : 'text-red-500'}`}>
+                          {p.redemptionRate}%
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Analytics by source */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Pie chart */}
         <div className="card p-5">
           <div className="flex items-center gap-2 mb-4">
             <BarChart2 className="w-4 h-4 text-gray-400" />
-            <h2 className="font-semibold text-gray-900 dark:text-white">Топ товаров</h2>
+            <h2 className="font-semibold text-gray-900 dark:text-white">Заявки по каналах</h2>
           </div>
           {loading ? (
-            <div className="h-[200px] flex items-center justify-center">
+            <div className="h-[220px] flex items-center justify-center">
               <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
             </div>
-          ) : byProduct.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-8">Нет данных</p>
+          ) : bySource.length === 0 ? (
+            <p className="text-gray-400 text-sm text-center py-10">Немає даних</p>
           ) : (
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={byProduct} layout="vertical" margin={{ left: 8 }}>
-                <XAxis type="number" tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10 }} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={100} />
-                <Tooltip formatter={(v: number) => [formatCurrency(v), 'Выручка']} contentStyle={{ fontSize: 12 }} />
-                <Bar dataKey="revenue" fill="#3b82f6" radius={[0, 4, 4, 0]} />
-              </BarChart>
+              <PieChart>
+                <Pie
+                  data={bySource}
+                  dataKey="total"
+                  nameKey="label"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={80}
+                  label={({ label, percent }) =>
+                    `${label} ${(percent * 100).toFixed(0)}%`
+                  }
+                  labelLine={false}
+                >
+                  {bySource.map((_, i) => (
+                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(v: number, _name, props) => [
+                    `${v} зак. · ${formatCurrency(props.payload.revenue)}`,
+                    props.payload.label,
+                  ]}
+                  contentStyle={{ fontSize: 12 }}
+                />
+                <Legend formatter={(value) => <span className="text-xs">{value}</span>} />
+              </PieChart>
             </ResponsiveContainer>
           )}
         </div>
+
+        {/* Source table */}
+        <div className="card p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <TrendingUp className="w-4 h-4 text-gray-400" />
+            <h2 className="font-semibold text-gray-900 dark:text-white">Виручка по каналах</h2>
+          </div>
+          {loading ? (
+            <div className="h-[220px] flex items-center justify-center">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
+            </div>
+          ) : bySource.length === 0 ? (
+            <p className="text-gray-400 text-sm text-center py-10">Немає даних</p>
+          ) : (
+            <div className="space-y-3">
+              {bySource.map((s, i) => {
+                const maxRevenue = Math.max(...bySource.map((x) => x.revenue));
+                return (
+                  <div key={s.source}>
+                    <div className="flex justify-between items-center text-sm mb-1">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
+                        />
+                        <span className="font-medium text-gray-900 dark:text-white">{s.label}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-right">
+                        <span className="text-gray-400 text-xs">{s.total} зак. · {s.conversion}%</span>
+                        <span className="font-semibold text-gray-900 dark:text-white whitespace-nowrap">
+                          {formatCurrency(s.revenue)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: maxRevenue > 0 ? `${(s.revenue / maxRevenue) * 100}%` : '0%',
+                          backgroundColor: PIE_COLORS[i % PIE_COLORS.length],
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Conversion by manager */}
+      <div className="card overflow-hidden">
+        <div className="flex items-center gap-2 p-5 border-b border-gray-100 dark:border-gray-800">
+          <Users className="w-4 h-4 text-gray-400" />
+          <h2 className="font-semibold text-gray-900 dark:text-white">Конверсія менеджерів</h2>
+          <span className="text-xs text-gray-400 ml-1">NEW → CONFIRMED</span>
+        </div>
+        {loading ? (
+          <div className="flex justify-center py-10">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
+          </div>
+        ) : conversionByManager.length === 0 ? (
+          <p className="text-gray-400 text-sm text-center py-8">Немає даних за обраний період</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
+                  <th className="text-left table-header p-4">Менеджер</th>
+                  <th className="text-right table-header p-4">Всього</th>
+                  <th className="text-right table-header p-4">Підтверджено</th>
+                  <th className="text-right table-header p-4 hidden sm:table-cell">Скасовано</th>
+                  <th className="text-right table-header p-4 hidden sm:table-cell">Нові (без реакції)</th>
+                  <th className="text-right table-header p-4">Конверсія</th>
+                  <th className="text-right table-header p-4 hidden md:table-cell">Сер. відповідь</th>
+                </tr>
+              </thead>
+              <tbody>
+                {conversionByManager.map((m, i) => {
+                  const convColor =
+                    m.conversion >= 60
+                      ? 'text-green-600 dark:text-green-400'
+                      : m.conversion >= 30
+                      ? 'text-yellow-600 dark:text-yellow-400'
+                      : 'text-red-600 dark:text-red-400';
+                  return (
+                    <tr
+                      key={m.managerId}
+                      className="border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors"
+                    >
+                      <td className="p-4">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
+                          />
+                          <span className="font-medium text-sm text-gray-900 dark:text-white">
+                            {m.manager}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="p-4 text-right">
+                        <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                          {m.total}
+                        </span>
+                      </td>
+                      <td className="p-4 text-right">
+                        <span className="text-sm font-semibold text-green-600 dark:text-green-400">
+                          {m.confirmed}
+                        </span>
+                      </td>
+                      <td className="p-4 text-right hidden sm:table-cell">
+                        <span className="text-sm text-red-500">{m.cancelled}</span>
+                      </td>
+                      <td className="p-4 text-right hidden sm:table-cell">
+                        <span className="text-sm text-gray-400">{m.stillNew}</span>
+                      </td>
+                      <td className="p-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <div className="w-16 h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden hidden lg:block">
+                            <div
+                              className="h-full rounded-full transition-all"
+                              style={{
+                                width: `${Math.min(100, m.conversion)}%`,
+                                backgroundColor:
+                                  m.conversion >= 60 ? '#10b981' : m.conversion >= 30 ? '#f59e0b' : '#ef4444',
+                              }}
+                            />
+                          </div>
+                          <span className={`text-sm font-bold ${convColor}`}>
+                            {m.conversion}%
+                          </span>
+                        </div>
+                      </td>
+                      <td className="p-4 text-right hidden md:table-cell">
+                        <span className="text-sm text-gray-500">
+                          {m.avgResponseMinutes !== null
+                            ? m.avgResponseMinutes < 60
+                              ? `${m.avgResponseMinutes} хв`
+                              : `${Math.floor(m.avgResponseMinutes / 60)} год ${m.avgResponseMinutes % 60} хв`
+                            : '—'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* LTV / Repeat buyers */}
+      {ltv && (
+        <div className="card overflow-hidden">
+          <div className="flex items-center gap-3 p-5 border-b border-gray-100 dark:border-gray-800">
+            <Users className="w-4 h-4 text-gray-400" />
+            <h2 className="font-semibold text-gray-900 dark:text-white">LTV клиентов</h2>
+            <div className="ml-auto flex gap-4 text-sm">
+              <span className="text-gray-400">Повторные: <span className="font-semibold text-purple-600 dark:text-purple-400">{ltv.repeatBuyers}</span> / {ltv.totalWithOrders} ({ltv.repeatRate}%)</span>
+              <span className="text-gray-400">Средний LTV: <span className="font-semibold text-gray-900 dark:text-white">{formatCurrency(ltv.avgLtv)}</span></span>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
+                  <th className="text-left table-header p-4">Клиент</th>
+                  <th className="text-right table-header p-4">Заказов</th>
+                  <th className="text-right table-header p-4">LTV</th>
+                  <th className="text-right table-header p-4 hidden sm:table-cell">Ср. чек</th>
+                  <th className="text-right table-header p-4 hidden md:table-cell">Последний</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ltv.customers.slice(0, 10).map((c, i) => (
+                  <tr key={c.id} className="border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
+                    <td className="p-4">
+                      <p className="font-medium text-gray-900 dark:text-white">{c.name}</p>
+                      <p className="text-xs text-gray-400">{c.phone}</p>
+                    </td>
+                    <td className="p-4 text-right">
+                      <span className={`font-bold ${c.ordersCount > 1 ? 'text-purple-600 dark:text-purple-400' : 'text-gray-500'}`}>
+                        {c.ordersCount}
+                      </span>
+                      {c.ordersCount > 1 && <span className="ml-1 text-xs text-purple-400">↻</span>}
+                    </td>
+                    <td className="p-4 text-right font-semibold text-gray-900 dark:text-white">
+                      {formatCurrency(c.ltv)}
+                    </td>
+                    <td className="p-4 text-right text-gray-500 hidden sm:table-cell">
+                      {formatCurrency(c.avgOrder)}
+                    </td>
+                    <td className="p-4 text-right text-gray-400 hidden md:table-cell text-xs">
+                      {c.lastOrder ? formatDate(c.lastOrder) : '—'}
+                    </td>
+                  </tr>
+                ))}
+                {ltv.customers.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="p-8 text-center text-gray-400">Нет данных</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Expenses */}
       <div className="card overflow-hidden">

@@ -21,6 +21,7 @@ import {
   TrendingUp,
   ShoppingCart,
   Calendar,
+  ShieldAlert,
 } from 'lucide-react';
 
 interface FullCustomer extends Customer {
@@ -59,6 +60,26 @@ export default function CustomerDetailPage() {
     fetchCustomer();
   }, [id]);
 
+  const [blacklistLoading, setBlacklistLoading] = useState(false);
+
+  const handleToggleBlacklist = async () => {
+    if (!customer) return;
+    const isBlacklisted = !customer.isBlacklisted;
+    let blacklistReason: string | null = null;
+    if (isBlacklisted) {
+      blacklistReason = prompt('Причина (необов\'язково):') ?? '';
+    }
+    setBlacklistLoading(true);
+    try {
+      await api.patch(`/customers/${id}/blacklist`, { isBlacklisted, blacklistReason });
+      toast.success(isBlacklisted ? 'Клієнта додано до чорного списку' : 'Клієнта знято з чорного списку');
+      fetchCustomer();
+    } catch {
+      toast.error('Помилка');
+    }
+    setBlacklistLoading(false);
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -88,6 +109,19 @@ export default function CustomerDetailPage() {
 
   return (
     <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-5">
+      {/* Blacklist warning */}
+      {customer.isBlacklisted && (
+        <div className="flex items-start gap-3 bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800 rounded-xl p-4">
+          <ShieldAlert className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold text-red-700 dark:text-red-400">Клієнт у чорному списку</p>
+            {customer.blacklistReason && (
+              <p className="text-sm text-red-600 dark:text-red-500 mt-0.5">{customer.blacklistReason}</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">
         <Link href="/customers" className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors">
@@ -99,7 +133,14 @@ export default function CustomerDetailPage() {
           </span>
         </div>
         <div className="flex-1">
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white">{customer.name}</h1>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-xl font-bold text-gray-900 dark:text-white">{customer.name}</h1>
+            {customer.isBlacklisted && (
+              <span className="inline-flex items-center gap-1 text-xs font-medium bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400 px-2 py-0.5 rounded-full">
+                <ShieldAlert className="w-3 h-3" /> Чорний список
+              </span>
+            )}
+          </div>
           <p className="text-xs text-gray-400">{customer.phone}</p>
         </div>
         {canEdit && (
@@ -114,9 +155,23 @@ export default function CustomerDetailPage() {
               </button>
             </div>
           ) : (
-            <button onClick={() => setEditing(true)} className="btn-secondary">
-              <Edit className="w-4 h-4" /> Редактировать
-            </button>
+            <div className="flex gap-2">
+              <button onClick={() => setEditing(true)} className="btn-secondary">
+                <Edit className="w-4 h-4" /> Редактировать
+              </button>
+              <button
+                onClick={handleToggleBlacklist}
+                disabled={blacklistLoading}
+                className={`flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+                  customer.isBlacklisted
+                    ? 'border-gray-200 dark:border-gray-700 text-gray-500 hover:border-green-400 hover:text-green-600'
+                    : 'border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30'
+                }`}
+              >
+                <ShieldAlert className="w-4 h-4" />
+                {customer.isBlacklisted ? 'Зняти' : 'Чорний список'}
+              </button>
+            </div>
           )
         )}
       </div>

@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
+import { logActivity } from '../services/notifications';
 
 export const getCustomers = async (req: AuthRequest, res: Response) => {
   const { search, page = '1', limit = '20' } = req.query as Record<string, string>;
@@ -95,6 +96,35 @@ export const updateCustomer = async (req: AuthRequest, res: Response) => {
   });
 
   return res.json(customer);
+};
+
+export const toggleBlacklist = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  const { isBlacklisted, blacklistReason } = req.body;
+
+  const customer = await prisma.customer.findUnique({ where: { id } });
+  if (!customer) {
+    return res.status(404).json({ error: 'Клиент не найден' });
+  }
+
+  const updated = await prisma.customer.update({
+    where: { id },
+    data: {
+      isBlacklisted: Boolean(isBlacklisted),
+      blacklistReason: isBlacklisted ? (blacklistReason?.trim() || null) : null,
+    },
+  });
+
+  await logActivity({
+    userId: req.user?.id,
+    action: isBlacklisted ? 'CUSTOMER_BLACKLISTED' : 'CUSTOMER_UNBLACKLISTED',
+    entityType: 'Customer',
+    entityId: id,
+    details: isBlacklisted ? `Причина: ${blacklistReason || 'не вказана'}` : 'Знято з чорного списку',
+    ip: req.ip,
+  });
+
+  return res.json(updated);
 };
 
 export const deleteCustomer = async (req: AuthRequest, res: Response) => {

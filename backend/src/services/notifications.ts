@@ -2,6 +2,7 @@ import prisma from './prisma';
 import { sendTelegramMessage, formatOrderNotification } from './telegram';
 import logger from '../utils/logger';
 
+
 export async function createNotification({
   userId,
   type,
@@ -64,6 +65,10 @@ export async function notifyNewOrder(order: {
           botToken: config.botToken,
           chatId: config.chatId,
           message,
+          inlineKeyboard: [[
+            { text: '✅ Підтвердити', callback_data: `confirm:${order.id}` },
+            { text: '❌ Відмова', callback_data: `cancel:${order.id}` },
+          ]],
         });
       }
     }

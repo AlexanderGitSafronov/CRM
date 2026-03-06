@@ -13,6 +13,8 @@ import {
   Package,
   MessageSquare,
   CheckCircle2,
+  ChevronDown,
+  BookOpen,
   XCircle,
   PhoneMissed,
   PhoneCall,
@@ -22,6 +24,10 @@ import {
   Mail,
   MapPin,
   User,
+  ShieldAlert,
+  Bell,
+  Clock,
+  Trash2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import NovaPoshtaSelect from '@/components/nova-poshta/NovaPoshtaSelect';
@@ -83,10 +89,27 @@ export default function CcOrderDetailPage() {
   const [deliveryService, setDeliveryService] = useState('');
   const [deliveryCity, setDeliveryCity] = useState('');
   const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [npCityRef, setNpCityRef] = useState('');
+  const [npWarehouseRef, setNpWarehouseRef] = useState('');
   const [recipientName, setRecipientName] = useState('');
   const [comment, setComment] = useState('');
+  const [cancelReason, setCancelReason] = useState('');
+  const [showScript, setShowScript] = useState(false);
   const [upsellAmount, setUpsellAmount] = useState('');
   const [customUpsell, setCustomUpsell] = useState('');
+
+  // Callbacks
+  const [callbacks, setCallbacks] = useState<{ id: string; scheduledAt: string; note: string | null; done: boolean; manager?: { name: string } | null }[]>([]);
+  const [cbScheduledAt, setCbScheduledAt] = useState('');
+  const [cbNote, setCbNote] = useState('');
+  const [cbSaving, setCbSaving] = useState(false);
+
+  const loadCallbacks = async () => {
+    try {
+      const res = await api.get(`/callbacks?orderId=${id}&done=false`);
+      setCallbacks(res.data ?? []);
+    } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -98,8 +121,11 @@ export default function CcOrderDetailPage() {
         setDeliveryService(o.deliveryService ?? '');
         setDeliveryCity(o.deliveryCity ?? o.customer.city ?? '');
         setDeliveryAddress(o.deliveryAddress ?? o.customer.address ?? '');
+        setNpCityRef(o.npCityRef ?? '');
+        setNpWarehouseRef(o.npWarehouseRef ?? '');
         setRecipientName(o.recipientName ?? o.customer.name);
         setComment(o.comment ?? '');
+        setCancelReason((o as Order & { cancelReason?: string }).cancelReason ?? '');
       } catch {
         toast.error('Заказ не найден');
         router.push('/cc/orders');
@@ -107,7 +133,37 @@ export default function CcOrderDetailPage() {
       setLoading(false);
     };
     load();
-  }, [id, router]);
+    loadCallbacks();
+  }, [id, router]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAddCallback = async () => {
+    if (!cbScheduledAt) return;
+    setCbSaving(true);
+    try {
+      await api.post('/callbacks', { orderId: id, scheduledAt: cbScheduledAt, note: cbNote.trim() || null });
+      setCbScheduledAt('');
+      setCbNote('');
+      await loadCallbacks();
+      toast.success('Перезвін заплановано');
+    } catch {
+      toast.error('Помилка');
+    }
+    setCbSaving(false);
+  };
+
+  const handleDoneCallback = async (cbId: string) => {
+    try {
+      await api.patch(`/callbacks/${cbId}/done`);
+      await loadCallbacks();
+    } catch { toast.error('Помилка'); }
+  };
+
+  const handleDeleteCallback = async (cbId: string) => {
+    try {
+      await api.delete(`/callbacks/${cbId}`);
+      await loadCallbacks();
+    } catch { toast.error('Помилка'); }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -118,8 +174,11 @@ export default function CcOrderDetailPage() {
         deliveryService: deliveryService || null,
         deliveryCity: deliveryCity.trim() || null,
         deliveryAddress: deliveryAddress.trim() || null,
+        npCityRef: npCityRef || null,
+        npWarehouseRef: npWarehouseRef || null,
         recipientName: recipientName.trim() || null,
         comment: comment.trim() || null,
+        cancelReason: cancelReason.trim() || null,
         upsellAmount: finalUpsell > 0 ? finalUpsell : undefined,
       });
       setOrder(res.data);
@@ -175,6 +234,19 @@ export default function CcOrderDetailPage() {
           <p className="text-sm text-gray-400">{formatDate(order.createdAt)}</p>
         </div>
       </div>
+
+      {/* Blacklist warning */}
+      {order.customer.isBlacklisted && (
+        <div className="flex items-start gap-3 bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800 rounded-xl p-4">
+          <ShieldAlert className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold text-red-700 dark:text-red-400">Клієнт у чорному списку</p>
+            {order.customer.blacklistReason && (
+              <p className="text-sm text-red-600 dark:text-red-500 mt-0.5">{order.customer.blacklistReason}</p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
@@ -282,6 +354,96 @@ export default function CcOrderDetailPage() {
             </div>
           </div>
 
+          {/* Причина відмови — показується тільки якщо CANCELLED */}
+          {status === 'CANCELLED' && (
+            <div className="card p-4 border-red-200 dark:border-red-800 ring-1 ring-red-200 dark:ring-red-800">
+              <div className="flex items-center gap-2 mb-3">
+                <XCircle className="w-4 h-4 text-red-500" />
+                <h2 className="font-semibold text-gray-900 dark:text-white">Причина відмови</h2>
+              </div>
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                {[
+                  'Дорого',
+                  'Передумав',
+                  'Вже купив',
+                  'Не додзвонились',
+                  'Не той товар',
+                  'Не влаштовує доставка',
+                  'Немає грошей',
+                  'Інше',
+                ].map((reason) => (
+                  <button
+                    key={reason}
+                    onClick={() => setCancelReason(cancelReason === reason ? '' : reason)}
+                    className={cn(
+                      'px-3 py-2 rounded-lg border text-sm font-medium transition-all text-left',
+                      cancelReason === reason
+                        ? 'bg-red-500 border-red-500 text-white'
+                        : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-red-50 dark:hover:bg-red-900/20 hover:border-red-300 hover:text-red-700'
+                    )}
+                  >
+                    {reason}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="text"
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="Або введіть вручну..."
+                className="input w-full text-sm"
+              />
+            </div>
+          )}
+
+          {/* Скрипт продажу */}
+          <div className="card p-4">
+            <button
+              onClick={() => setShowScript((p) => !p)}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-gray-400" />
+                <span className="font-semibold text-gray-900 dark:text-white text-sm">Скрипт дзвінка</span>
+              </div>
+              <ChevronDown className={cn('w-4 h-4 text-gray-400 transition-transform', showScript && 'rotate-180')} />
+            </button>
+            {showScript && (
+              <div className="mt-3 space-y-3 text-sm text-gray-700 dark:text-gray-300">
+                <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3">
+                  <p className="font-semibold text-blue-700 dark:text-blue-400 mb-1">1. Привітання</p>
+                  <p className="text-gray-600 dark:text-gray-400 italic">
+                    &ldquo;Добрий день, мене звати [ім'я], телефоную з приводу вашого замовлення #<strong>{order.orderNum}</strong>. Зручно зараз говорити?&rdquo;
+                  </p>
+                </div>
+                <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-3">
+                  <p className="font-semibold text-emerald-700 dark:text-emerald-400 mb-1">2. Підтвердження</p>
+                  <p className="text-gray-600 dark:text-gray-400 italic">
+                    &ldquo;Ваше замовлення: {order.items.map(i => `${i.name} × ${i.quantity}`).join(', ')}. Загальна сума {order.total} грн. Все вірно?&rdquo;
+                  </p>
+                </div>
+                <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-3">
+                  <p className="font-semibold text-amber-700 dark:text-amber-400 mb-1">3. Допродаж</p>
+                  <p className="text-gray-600 dark:text-gray-400 italic">
+                    &ldquo;Є можливість додати до замовлення [доп. товар] зі знижкою. Хочете скористатись?&rdquo;
+                  </p>
+                </div>
+                <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-3">
+                  <p className="font-semibold text-purple-700 dark:text-purple-400 mb-1">4. Доставка</p>
+                  <p className="text-gray-600 dark:text-gray-400 italic">
+                    &ldquo;Уточніть, будь ласка, місто та відділення Нової Пошти для відправки. Ваше замовлення відправимо протягом 1-2 робочих днів.&rdquo;
+                  </p>
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3">
+                  <p className="font-semibold text-gray-700 dark:text-gray-300 mb-1">5. Завершення</p>
+                  <p className="text-gray-600 dark:text-gray-400 italic">
+                    &ldquo;Дякуємо за замовлення! Після відправки ми надішлемо SMS з номером ТТН. Гарного дня!&rdquo;
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Куди відправляти */}
           <div className="card p-4 ring-2 ring-primary-100 dark:ring-primary-900/30">
             <div className="flex items-center gap-2 mb-3">
@@ -324,6 +486,8 @@ export default function CcOrderDetailPage() {
                   addressValue={deliveryAddress}
                   onCityChange={setDeliveryCity}
                   onAddressChange={setDeliveryAddress}
+                  onCityRefChange={setNpCityRef}
+                  onWarehouseRefChange={setNpWarehouseRef}
                 />
               ) : (
                 <>
@@ -379,6 +543,77 @@ export default function CcOrderDetailPage() {
                   )}
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Перезвін */}
+          <div className="card p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Bell className="w-4 h-4 text-orange-500" />
+              <h2 className="font-semibold text-gray-900 dark:text-white">Перезвін</h2>
+              {callbacks.length > 0 && (
+                <span className="ml-auto text-xs bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 font-semibold px-2 py-0.5 rounded-full">
+                  {callbacks.length}
+                </span>
+              )}
+            </div>
+
+            {/* Existing callbacks */}
+            {callbacks.length > 0 && (
+              <div className="space-y-2 mb-3">
+                {callbacks.map((cb) => (
+                  <div key={cb.id} className="flex items-start gap-2 bg-orange-50 dark:bg-orange-900/10 rounded-lg p-2.5 border border-orange-100 dark:border-orange-900/30">
+                    <Clock className="w-3.5 h-3.5 text-orange-500 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                        {new Date(cb.scheduledAt).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                      {cb.note && <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{cb.note}</p>}
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                      <button
+                        onClick={() => handleDoneCallback(cb.id)}
+                        className="p-1 rounded text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors"
+                        title="Виконано"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteCallback(cb.id)}
+                        className="p-1 rounded text-gray-400 hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-500 transition-colors"
+                        title="Видалити"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add callback form */}
+            <div className="space-y-2">
+              <input
+                type="datetime-local"
+                value={cbScheduledAt}
+                onChange={(e) => setCbScheduledAt(e.target.value)}
+                className="input w-full text-sm"
+                min={new Date().toISOString().slice(0, 16)}
+              />
+              <input
+                type="text"
+                value={cbNote}
+                onChange={(e) => setCbNote(e.target.value)}
+                placeholder="Нотатка (необов'язково)"
+                className="input w-full text-sm"
+              />
+              <button
+                onClick={handleAddCallback}
+                disabled={!cbScheduledAt || cbSaving}
+                className="w-full py-2 rounded-lg bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-white text-sm font-medium transition-colors"
+              >
+                {cbSaving ? 'Збереження...' : '+ Запланувати перезвін'}
+              </button>
             </div>
           </div>
 

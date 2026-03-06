@@ -3,6 +3,8 @@ import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { notifyNewOrder, logActivity } from '../services/notifications';
 import { broadcastEvent } from '../services/eventBus';
+import { sendIncomeToRashod } from '../services/rashodWebhook';
+import { getNextManagerId } from '../services/roundRobin';
 
 const ORDER_SELECT = {
   id: true,
@@ -15,9 +17,13 @@ const ORDER_SELECT = {
   deliveryCity: true,
   deliveryAddress: true,
   recipientName: true,
+  npCityRef: true,
+  npWarehouseRef: true,
+  trackingNumber: true,
+  cancelReason: true,
   createdAt: true,
   updatedAt: true,
-  customer: { select: { id: true, name: true, phone: true, email: true, city: true, address: true } },
+  customer: { select: { id: true, name: true, phone: true, email: true, city: true, address: true, isBlacklisted: true, blacklistReason: true } },
   manager: { select: { id: true, name: true, email: true } },
   items: {
     select: {
@@ -152,6 +158,10 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     });
   }
 
+  const blacklistWarning = dbCustomer.isBlacklisted
+    ? `⚠️ ЧОРНИЙ СПИСОК: ${dbCustomer.blacklistReason || 'без причини'}`
+    : null;
+
   // Generate orderNum
   const lastOrder = await prisma.order.findFirst({ orderBy: { orderNum: 'desc' }, select: { orderNum: true } });
   const orderNum = (lastOrder?.orderNum ?? 0) + 1;
@@ -163,8 +173,12 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     0
   );
 
+  // If no managerId provided and requester is not a manager, use round-robin
   const assignedManagerId =
-    managerId || (req.user?.role !== 'VIEWER' ? req.user?.id : undefined);
+    managerId ||
+    (req.user?.role !== 'VIEWER' ? req.user?.id : null) ||
+    (await getNextManagerId()) ||
+    null;
 
   const order = await prisma.order.create({
     data: {
@@ -172,7 +186,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       customerId: dbCustomer.id,
       managerId: assignedManagerId || null,
       source,
-      comment: comment?.trim() || null,
+      comment: [blacklistWarning, comment?.trim()].filter(Boolean).join('\n') || null,
       total,
       items: {
         create: items.map((item: {
@@ -271,9 +285,8 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     updateData.comment = comment?.trim() || null;
   }
 
-  // Update items if provided
+  // Update items if provided — calculate total first, delete+create inside transaction
   if (items?.length) {
-    await prisma.orderItem.deleteMany({ where: { orderId: id } });
     const total = items.reduce(
       (sum: number, item: { price: number; quantity: number }) =>
         sum + item.price * item.quantity,
@@ -302,11 +315,28 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     });
   }
 
-  const order = await prisma.order.update({
-    where: { id },
-    data: updateData,
-    select: ORDER_SELECT,
+  // Wrap delete+update in transaction to avoid partial state if update fails
+  const order = await prisma.$transaction(async (tx) => {
+    if (items?.length) {
+      await tx.orderItem.deleteMany({ where: { orderId: id } });
+    }
+    return tx.order.update({
+      where: { id },
+      data: updateData,
+      select: ORDER_SELECT,
+    });
   });
+
+  // If status changed to DELIVERED — send income to rashod
+  if (status === 'DELIVERED') {
+    sendIncomeToRashod({
+      orderId: id,
+      orderNum: order.orderNum,
+      total: order.total,
+      source: order.source,
+      deliveredAt: new Date(),
+    }).catch(() => {}); // fire-and-forget, never block response
+  }
 
   await logActivity({
     userId: req.user?.id,
@@ -329,8 +359,11 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
     deliveryService,
     deliveryCity,
     deliveryAddress,
+    npCityRef,
+    npWarehouseRef,
     recipientName,
     upsellAmount,
+    cancelReason,
   } = req.body;
 
   const existing = await prisma.order.findUnique({
@@ -368,8 +401,11 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
   if (deliveryService !== undefined) updateData.deliveryService = deliveryService || null;
   if (deliveryCity !== undefined) updateData.deliveryCity = deliveryCity?.trim() || null;
   if (deliveryAddress !== undefined) updateData.deliveryAddress = deliveryAddress?.trim() || null;
+  if (npCityRef !== undefined) updateData.npCityRef = npCityRef || null;
+  if (npWarehouseRef !== undefined) updateData.npWarehouseRef = npWarehouseRef || null;
   if (recipientName !== undefined) updateData.recipientName = recipientName?.trim() || null;
   if (comment !== undefined) updateData.comment = comment?.trim() || null;
+  if (cancelReason !== undefined) updateData.cancelReason = cancelReason?.trim() || null;
 
   // Upsell: create extra order item and update total
   if (upsellAmount && Number(upsellAmount) > 0) {

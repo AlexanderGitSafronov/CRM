@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -8,6 +9,9 @@ import fs from 'fs';
 import routes from './routes';
 import { errorHandler, notFound } from './middleware/errorHandler';
 import logger from './utils/logger';
+import { startNpTracker } from './workers/npTracker';
+import { startSlaTracker } from './workers/slaTracker';
+import { startCallbackReminder } from './workers/callbackReminder';
 
 // Security guard: warn about insecure defaults
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -83,6 +87,9 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   logger.info(`🚀 CRM Backend running on http://localhost:${PORT}`);
   logger.info(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+  startNpTracker();
+  startSlaTracker();
+  startCallbackReminder();
 });
 
 export default app;

@@ -38,6 +38,8 @@ export interface Customer {
   city?: string;
   address?: string;
   notes?: string;
+  isBlacklisted?: boolean;
+  blacklistReason?: string;
   ltv?: number;
   ordersCount?: number;
   createdAt: string;
@@ -80,6 +82,9 @@ export interface Order {
   deliveryCity?: string;
   deliveryAddress?: string;
   recipientName?: string;
+  npCityRef?: string;
+  npWarehouseRef?: string;
+  trackingNumber?: string;
   createdAt: string;
   updatedAt: string;
   customer: {
@@ -89,6 +94,8 @@ export interface Order {
     email?: string;
     city?: string;
     address?: string;
+    isBlacklisted?: boolean;
+    blacklistReason?: string;
   };
   manager?: {
     id: string;

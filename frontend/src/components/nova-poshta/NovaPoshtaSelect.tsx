@@ -24,9 +24,11 @@ interface Props {
   addressValue: string;
   onCityChange: (city: string) => void;
   onAddressChange: (address: string) => void;
+  onCityRefChange?: (ref: string) => void;
+  onWarehouseRefChange?: (ref: string) => void;
 }
 
-export default function NovaPoshtaSelect({ cityValue, addressValue, onCityChange, onAddressChange }: Props) {
+export default function NovaPoshtaSelect({ cityValue, addressValue, onCityChange, onAddressChange, onCityRefChange, onWarehouseRefChange }: Props) {
   // City autocomplete
   const [cityQuery, setCityQuery] = useState(cityValue);
   const [cities, setCities] = useState<NpCity[]>([]);
@@ -113,16 +115,19 @@ export default function NovaPoshtaSelect({ cityValue, addressValue, onCityChange
     setCityQuery(city.label);
     setShowCityDropdown(false);
     onCityChange(city.label);
+    onCityRefChange?.(city.ref);
     // Reset warehouse
     setWarehouseQuery('');
     setWarehouses([]);
     onAddressChange('');
+    onWarehouseRefChange?.('');
     // Load warehouses immediately
     loadWarehouses(city, '');
   };
 
   const handleWarehouseSelect = (w: NpWarehouse) => {
     onAddressChange(w.label);
+    onWarehouseRefChange?.(w.ref);
     setWarehouseQuery(w.label);
     setShowWarehouseDropdown(false);
   };
@@ -134,7 +139,9 @@ export default function NovaPoshtaSelect({ cityValue, addressValue, onCityChange
     setWarehouses([]);
     setWarehouseQuery('');
     onCityChange('');
+    onCityRefChange?.('');
     onAddressChange('');
+    onWarehouseRefChange?.('');
   };
 
   // Sync external changes (e.g. when order loads)
