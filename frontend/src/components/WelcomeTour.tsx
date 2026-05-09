@@ -72,7 +72,7 @@ export function WelcomeTour() {
             },
           },
           {
-            element: 'button[title^="Пошук"], button:has(svg.lucide-search)',
+            element: '[data-tour="search"]',
             popover: {
               title: '🔍 Швидкий пошук',
               description: 'Натисніть ⌘K (Ctrl+K) у будь-якому місці — і миттєво знайдете заказ, клієнта чи товар.',

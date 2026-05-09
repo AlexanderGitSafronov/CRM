@@ -41,6 +41,7 @@ export default function Header({ onMenuToggle, title, soundEnabled = true, onSou
       {/* Global search button */}
       <button
         onClick={openSearch}
+        data-tour="search"
         className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600 transition-colors text-sm"
       >
         <Search className="w-4 h-4" />

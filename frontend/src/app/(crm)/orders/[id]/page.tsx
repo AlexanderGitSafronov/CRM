@@ -61,6 +61,39 @@ const ACTION_LABELS: Record<string, string> = {
   CC_ORDER_UPDATED: 'КЦ обновил заказ',
 };
 
+async function downloadTtnPdf(orderId: string, size: '100x100' | 'A4', ttn: string) {
+  try {
+    const res = await api.get('/nova-poshta/print-ttn', {
+      params: { orderId, format: 'pdf', size },
+      responseType: 'blob',
+    });
+    const blobUrl = URL.createObjectURL(res.data);
+    const w = window.open(blobUrl, '_blank');
+    // Trigger download fallback if popup blocked
+    if (!w) {
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `TTN-${ttn}-${size}.pdf`;
+      a.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+  } catch (err: unknown) {
+    let msg = 'Помилка';
+    const errResp = (err as { response?: { data?: unknown } })?.response;
+    // Blob may contain JSON error body
+    if (errResp?.data instanceof Blob) {
+      try {
+        const text = await errResp.data.text();
+        const j = JSON.parse(text);
+        msg = j.error || msg;
+      } catch { /* keep default */ }
+    } else if (typeof errResp?.data === 'object' && errResp.data && 'error' in errResp.data) {
+      msg = (errResp.data as { error: string }).error;
+    }
+    toast.error(msg);
+  }
+}
+
 export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -618,30 +651,14 @@ export default function OrderDetailPage() {
                     {canEdit && (
                       <div className="flex gap-2">
                         <button
-                          onClick={async () => {
-                            try {
-                              const res = await api.get('/nova-poshta/print-ttn', { params: { orderId: order.id, format: 'pdf', size: '100x100' } });
-                              window.open(res.data.url, '_blank');
-                            } catch (err: unknown) {
-                              const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
-                              toast.error(msg);
-                            }
-                          }}
+                          onClick={() => downloadTtnPdf(order.id, '100x100', order.trackingNumber!)}
                           className="flex-1 flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-950/20 transition-colors"
                         >
                           <FileText className="w-3.5 h-3.5" />
                           Маркування PDF
                         </button>
                         <button
-                          onClick={async () => {
-                            try {
-                              const res = await api.get('/nova-poshta/print-ttn', { params: { orderId: order.id, format: 'pdf', size: 'A4' } });
-                              window.open(res.data.url, '_blank');
-                            } catch (err: unknown) {
-                              const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
-                              toast.error(msg);
-                            }
-                          }}
+                          onClick={() => downloadTtnPdf(order.id, 'A4', order.trackingNumber!)}
                           className="flex-1 flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-950/20 transition-colors"
                         >
                           <FileText className="w-3.5 h-3.5" />

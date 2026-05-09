@@ -358,7 +358,8 @@ router.post('/sla/run', requireRole('ADMIN'), async (_req: AuthRequest, res: Res
 });
 
 // GET /api/nova-poshta/print-ttn?orderId=xxx&format=pdf|html&size=100x100|A4
-// Returns the URL to a printable TTN — frontend opens it in a new tab.
+// Streams the printable TTN through the backend so the NP apiKey never
+// leaks to the browser (URL referer, history, sharing).
 router.get('/print-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const { orderId } = req.query as { orderId?: string };
@@ -368,7 +369,7 @@ router.get('/print-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthReques
 
   const order = await prisma.order.findFirst({
     where: { id: orderId, organizationId: orgId },
-    select: { trackingNumber: true },
+    select: { trackingNumber: true, orderNum: true },
   });
   if (!order) return res.status(404).json({ error: 'Замовлення не знайдено' });
   if (!order.trackingNumber) return res.status(400).json({ error: 'У замовлення немає ТТН' });
@@ -382,11 +383,25 @@ router.get('/print-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthReques
     : process.env.NP_API_KEY || '';
   if (!apiKey) return res.status(400).json({ error: 'NP API key не задано' });
 
-  // NP printing URL: GET /v2.0/printDocument/{apiKey}/orders[]/{format}/{size}
-  // Returns the PDF/HTML directly when accessed.
-  const sizePath = size === 'A4' ? '' : `/100x100`;
-  const url = `https://my.novaposhta.ua/orders/printDocument/orders[]/${order.trackingNumber}/type/${format}/apiKey/${apiKey}${sizePath}`;
-  return res.json({ url });
+  const sizePath = size === 'A4' ? '' : '/100x100';
+  const upstream = `https://my.novaposhta.ua/orders/printDocument/orders[]/${order.trackingNumber}/type/${format}/apiKey/${apiKey}${sizePath}`;
+
+  try {
+    const r = await fetch(upstream);
+    if (!r.ok) {
+      logger.warn(`NP printDocument returned ${r.status} for TTN ${order.trackingNumber}`);
+      return res.status(502).json({ error: `Нова Пошта повернула статус ${r.status}` });
+    }
+    const contentType = r.headers.get('content-type') || (format === 'pdf' ? 'application/pdf' : 'text/html');
+    const filename = `TTN-${order.trackingNumber}-${size}.${format === 'pdf' ? 'pdf' : 'html'}`;
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    const buf = Buffer.from(await r.arrayBuffer());
+    return res.send(buf);
+  } catch (err) {
+    logger.error('NP print-ttn proxy error:', err);
+    return res.status(500).json({ error: 'Помилка отримання документа з НП' });
+  }
 });
 
 export default router;
