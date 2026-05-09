@@ -1,0 +1,280 @@
+/* ============================================================
+   Custom theme for driver.js — futuristic glass + gradient glow
+   Loaded only when WelcomeTour is mounted.
+   ============================================================ */
+
+/* Backdrop: deep dark + subtle blur, no flat black */
+.driver-overlay {
+  background: radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.72), rgba(2, 6, 23, 0.92)) !important;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+/* Popover container — glass card with gradient border */
+.driver-popover {
+  background: linear-gradient(180deg, #0f172a, #0a0f1f) !important;
+  color: #f1f5f9 !important;
+  border: none !important;
+  border-radius: 18px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  box-shadow:
+    0 0 0 1px rgba(148, 163, 184, 0.12),
+    0 24px 48px -12px rgba(0, 0, 0, 0.7),
+    0 0 60px -10px rgba(99, 102, 241, 0.35) !important;
+  animation: tourPopIn 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  position: relative;
+}
+
+/* Animated gradient border (pseudo-element) */
+.driver-popover::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1.5px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #3b82f6, #a855f7, #d946ef, #3b82f6);
+  background-size: 300% 300%;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+  animation: tourGradientShift 8s linear infinite;
+}
+
+@keyframes tourPopIn {
+  from { opacity: 0; transform: scale(0.9) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes tourGradientShift {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
+}
+
+/* Soft outer glow that pulses */
+.driver-popover::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 22px;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.18), transparent 70%);
+  z-index: -1;
+  pointer-events: none;
+  animation: tourGlowPulse 3s ease-in-out infinite;
+}
+@keyframes tourGlowPulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+/* Inner content padding */
+.driver-popover-title,
+.driver-popover-description,
+.driver-popover-footer,
+.driver-popover-progress-text-wrapper {
+  padding-left: 22px !important;
+  padding-right: 22px !important;
+}
+
+.driver-popover-title {
+  padding-top: 22px !important;
+  font-size: 18px !important;
+  font-weight: 700 !important;
+  background: linear-gradient(90deg, #ffffff, #cbd5e1);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin: 0 0 10px !important;
+  letter-spacing: -0.01em;
+}
+
+.driver-popover-description {
+  font-size: 14px !important;
+  line-height: 1.55 !important;
+  color: rgba(241, 245, 249, 0.78) !important;
+  margin: 0 !important;
+  padding-bottom: 18px !important;
+}
+
+/* Footer: progress + buttons */
+.driver-popover-footer {
+  border-top: 1px solid rgba(148, 163, 184, 0.12) !important;
+  padding-top: 14px !important;
+  padding-bottom: 14px !important;
+  margin-top: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+/* Progress text — render as a slim line on top */
+.driver-popover-progress-text {
+  font-size: 11px !important;
+  color: rgba(148, 163, 184, 0.7) !important;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Buttons */
+.driver-popover-prev-btn,
+.driver-popover-next-btn,
+.driver-popover-close-btn {
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  padding: 8px 16px !important;
+  border-radius: 10px !important;
+  border: none !important;
+  cursor: pointer;
+  transition: all 0.2s ease !important;
+  text-shadow: none !important;
+}
+
+.driver-popover-prev-btn {
+  background: rgba(148, 163, 184, 0.12) !important;
+  color: #cbd5e1 !important;
+}
+.driver-popover-prev-btn:hover {
+  background: rgba(148, 163, 184, 0.2) !important;
+  color: #ffffff !important;
+}
+
+.driver-popover-next-btn {
+  background: linear-gradient(135deg, #3b82f6, #a855f7, #d946ef) !important;
+  background-size: 200% 200% !important;
+  background-position: 0% 50% !important;
+  color: #ffffff !important;
+  box-shadow: 0 6px 20px -6px rgba(99, 102, 241, 0.6) !important;
+}
+.driver-popover-next-btn:hover {
+  background-position: 100% 50% !important;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px -6px rgba(99, 102, 241, 0.75) !important;
+}
+
+/* Close (×) button — top-right corner */
+.driver-popover-close-btn {
+  position: absolute !important;
+  top: 14px !important;
+  right: 14px !important;
+  width: 28px !important;
+  height: 28px !important;
+  padding: 0 !important;
+  border-radius: 8px !important;
+  background: rgba(148, 163, 184, 0.12) !important;
+  color: rgba(241, 245, 249, 0.6) !important;
+  font-size: 18px !important;
+  line-height: 1 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+.driver-popover-close-btn:hover {
+  background: rgba(239, 68, 68, 0.25) !important;
+  color: #fff !important;
+}
+
+/* Arrow */
+.driver-popover-arrow {
+  border-color: #0f172a !important;
+}
+
+/* Spotlight target glow */
+.driver-active-element,
+.driver-highlighted-element {
+  box-shadow:
+    0 0 0 4px rgba(99, 102, 241, 0.45),
+    0 0 0 10px rgba(168, 85, 247, 0.18),
+    0 0 50px rgba(99, 102, 241, 0.5) !important;
+  border-radius: 12px !important;
+  transition: box-shadow 0.4s ease !important;
+}
+
+/* Custom inline branching buttons we render in description */
+.tour-branch-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+.tour-branch-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  color: #f1f5f9;
+  cursor: pointer;
+  text-align: left;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+.tour-branch-btn:hover {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(99, 102, 241, 0.6);
+  transform: translateX(2px);
+}
+.tour-branch-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.4), rgba(168, 85, 247, 0.4));
+  flex-shrink: 0;
+}
+.tour-branch-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.tour-branch-title {
+  font-weight: 600;
+}
+.tour-branch-hint {
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.85);
+  margin-top: 2px;
+}
+
+/* Action chip on final step */
+.tour-action-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.tour-action-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #f1f5f9;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+}
+.tour-action-chip:hover {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.6);
+}
+.tour-action-chip.primary {
+  background: linear-gradient(135deg, #3b82f6, #a855f7);
+  border-color: transparent;
+  color: #fff;
+}
+.tour-action-chip.primary:hover {
+  filter: brightness(1.1);
+}
