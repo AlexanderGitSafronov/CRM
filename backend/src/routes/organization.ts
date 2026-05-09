@@ -54,10 +54,17 @@ router.put('/', requireRole('ADMIN'), async (req: AuthRequest, res: Response) =>
     data.name = name.trim().slice(0, 80);
   }
   if (logo !== undefined) {
-    // Sanity check: data URL or http(s) URL, max 500KB string length
+    // Only data:image URLs are allowed. Arbitrary http(s) URLs are an SSRF
+    // and tracking vector when rendered as <img src=...> in the browser
+    // (e.g. requests to internal IPs / metadata services from the user's
+    // network). The client uploader produces data: URLs anyway.
     if (logo && typeof logo === 'string') {
       if (logo.length > 500_000) return res.status(400).json({ error: 'Логотип занадто великий (макс ~500KB)' });
-      if (!/^data:image\/|^https?:\/\//.test(logo)) return res.status(400).json({ error: 'Невалідний формат логотипу' });
+      // Disallow SVG — it can contain <script> that runs when used as
+      // <object>/<iframe> source. Raster formats only.
+      if (!/^data:image\/(png|jpe?g|webp|gif);base64,/.test(logo)) {
+        return res.status(400).json({ error: 'Невалідний формат логотипу (тільки PNG/JPG/WebP/GIF)' });
+      }
       data.logo = logo;
     } else {
       data.logo = null;

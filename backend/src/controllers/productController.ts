@@ -3,6 +3,19 @@ import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { logActivity } from '../services/notifications';
 
+// Image input validator — accepts data:image/* (raster only) or https:// URL.
+// Rejects javascript:, file:, data:text/html, and SVG (script-bearing).
+function validateImage(input: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (input === undefined) return { ok: true, value: undefined as unknown as null };
+  if (input === null || input === '') return { ok: true, value: null };
+  if (typeof input !== 'string') return { ok: false, error: 'image must be a string' };
+  if (input.length > 500_000) return { ok: false, error: 'Зображення занадто велике (макс ~500KB)' };
+  const isData = /^data:image\/(png|jpe?g|webp|gif);base64,/.test(input);
+  const isHttps = /^https:\/\/[^\s<>"]+$/.test(input);
+  if (!isData && !isHttps) return { ok: false, error: 'Невалідний формат зображення' };
+  return { ok: true, value: input };
+}
+
 export const getProducts = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const { search, active, page = '1', limit = '50' } = req.query as Record<string, string>;
@@ -87,6 +100,9 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
     return res.status(402).json({ error: `Ліміт тарифу: максимум ${org.maxProducts} товарів. Оновіть план.` });
   }
 
+  const imgCheck = validateImage(image?.trim());
+  if (!imgCheck.ok) return res.status(400).json({ error: imgCheck.error });
+
   const product = await prisma.product.create({
     data: {
       organizationId: orgId,
@@ -97,7 +113,7 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
       salePrice: parseFloat(salePrice) || 0,
       stock: parseInt(stock) || 0,
       lowStockThreshold: req.body.lowStockThreshold !== undefined ? Math.max(0, parseInt(req.body.lowStockThreshold)) : 5,
-      image: image?.trim() || null,
+      image: imgCheck.value,
     },
   });
 
@@ -122,6 +138,13 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
   const existing = await prisma.product.findFirst({ where: { id, organizationId: orgId }, select: { id: true } });
   if (!existing) return res.status(404).json({ error: 'Товар не найден' });
 
+  let imagePatch: { image: string | null } | object = {};
+  if (image !== undefined) {
+    const imgCheck = validateImage(image?.trim());
+    if (!imgCheck.ok) return res.status(400).json({ error: imgCheck.error });
+    imagePatch = { image: imgCheck.value };
+  }
+
   const product = await prisma.product.update({
     where: { id },
     data: {
@@ -132,7 +155,7 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
       ...(salePrice !== undefined && { salePrice: parseFloat(salePrice) }),
       ...(stock !== undefined && { stock: parseInt(stock), lowStockNotifiedAt: null }),
       ...(lowStockThreshold !== undefined && { lowStockThreshold: Math.max(0, parseInt(lowStockThreshold)) }),
-      ...(image !== undefined && { image: image?.trim() || null }),
+      ...imagePatch,
       ...(active !== undefined && { active: Boolean(active) }),
     },
   });

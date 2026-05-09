@@ -44,7 +44,19 @@ if (!fs.existsSync(logsDir)) {
 
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
-  contentSecurityPolicy: false,
+  // API server CSP — disallow any active content (script/object/frame).
+  // It's an API; HTML-rendering only happens in error pages, where this
+  // also blocks any reflected-XSS via unforeseen response paths.
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'none'"],
+      formAction: ["'none'"],
+    },
+  },
+  referrerPolicy: { policy: 'no-referrer' },
 }));
 
 // Multi-origin CORS: allow comma-separated CORS_ORIGIN list
@@ -86,6 +98,20 @@ app.use('/api/auth/login', loginLimiter);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Query-parameter sanitizer: every query value must be a string.
+// Defends against NoSQL/operator-injection attempts like ?status[$gt]=X
+// (the express qs parser would otherwise turn that into a nested object
+// that Prisma chokes on, causing 500). Reject early with a clear 400.
+app.use('/api', (req, res, next) => {
+  for (const k of Object.keys(req.query)) {
+    const v = req.query[k];
+    if (typeof v !== 'string' && !(Array.isArray(v) && v.every((x) => typeof x === 'string'))) {
+      return res.status(400).json({ error: `Invalid query parameter: ${k}` });
+    }
+  }
+  next();
+});
 
 app.use((req, _res, next) => {
   logger.debug(`${req.method} ${req.url}`);
