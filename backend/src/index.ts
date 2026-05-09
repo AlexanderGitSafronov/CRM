@@ -15,6 +15,7 @@ import prisma from './services/prisma';
 import { startNpTracker } from './workers/npTracker';
 import { startSlaTracker } from './workers/slaTracker';
 import { startCallbackReminder } from './workers/callbackReminder';
+import { startLowStockWatcher } from './workers/lowStockWatcher';
 
 // Hard fail: production must have a real JWT secret
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -160,6 +161,7 @@ app.listen(PORT, async () => {
   startNpTracker();
   startSlaTracker();
   startCallbackReminder();
+  startLowStockWatcher();
 });
 
 export default app;

@@ -22,7 +22,10 @@ import {
   ShoppingCart,
   Calendar,
   ShieldAlert,
+  ListOrdered,
+  Clock,
 } from 'lucide-react';
+import CustomerTimeline from '@/components/CustomerTimeline';
 
 interface FullCustomer extends Customer {
   orders: Array<Order & { items: Array<{ name: string; quantity: number; price: number }> }>;
@@ -61,6 +64,7 @@ export default function CustomerDetailPage() {
   }, [id]);
 
   const [blacklistLoading, setBlacklistLoading] = useState(false);
+  const [view, setView] = useState<'timeline' | 'table'>('timeline');
 
   const handleToggleBlacklist = async () => {
     if (!customer) return;
@@ -257,9 +261,38 @@ export default function CustomerDetailPage() {
         {/* Orders history */}
         <div className="md:col-span-2 card overflow-hidden">
           <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-800">
-            <h2 className="font-semibold text-gray-900 dark:text-white">История заказов</h2>
-            <span className="text-xs text-gray-400">{customer.orders?.length ?? 0} заказов</span>
+            <h2 className="font-semibold text-gray-900 dark:text-white">Історія</h2>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400 mr-2">{customer.orders?.length ?? 0} заказов</span>
+              <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
+                <button
+                  onClick={() => setView('timeline')}
+                  className={`p-1 rounded-md ${view === 'timeline' ? 'bg-white dark:bg-gray-700 shadow-sm text-primary-600' : 'text-gray-500'}`}
+                  title="Таймлайн"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setView('table')}
+                  className={`p-1 rounded-md ${view === 'table' ? 'bg-white dark:bg-gray-700 shadow-sm text-primary-600' : 'text-gray-500'}`}
+                  title="Таблиця"
+                >
+                  <ListOrdered className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
           </div>
+          {view === 'timeline' && (
+            <div className="p-4">
+              <CustomerTimeline
+                orders={customer.orders ?? []}
+                notes={customer.notes}
+                isBlacklisted={customer.isBlacklisted}
+                blacklistReason={customer.blacklistReason}
+              />
+            </div>
+          )}
+          {view === 'table' && (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -310,6 +343,7 @@ export default function CustomerDetailPage() {
               </tbody>
             </table>
           </div>
+          )}
         </div>
       </div>
     </div>

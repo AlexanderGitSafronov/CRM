@@ -17,6 +17,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         id: true, name: true, slug: true, plan: true,
         maxUsers: true, maxOrders: true, maxProducts: true,
         subscriptionStatus: true, currentPeriodEnd: true, trialEndsAt: true,
+        logo: true, primaryColor: true,
         createdAt: true,
       },
     }),
@@ -42,26 +43,61 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   });
 });
 
-// PUT /api/organization — update name/slug
+// PUT /api/organization — update name/branding
 router.put('/', requireRole('ADMIN'), async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
-  const { name } = req.body as { name?: string };
+  const { name, logo, primaryColor } = req.body as { name?: string; logo?: string | null; primaryColor?: string | null };
 
-  if (!name?.trim()) return res.status(400).json({ error: 'Name required' });
+  const data: Record<string, unknown> = {};
+  if (name !== undefined) {
+    if (!name.trim()) return res.status(400).json({ error: 'Name required' });
+    data.name = name.trim().slice(0, 80);
+  }
+  if (logo !== undefined) {
+    // Sanity check: data URL or http(s) URL, max 500KB string length
+    if (logo && typeof logo === 'string') {
+      if (logo.length > 500_000) return res.status(400).json({ error: 'Логотип занадто великий (макс ~500KB)' });
+      if (!/^data:image\/|^https?:\/\//.test(logo)) return res.status(400).json({ error: 'Невалідний формат логотипу' });
+      data.logo = logo;
+    } else {
+      data.logo = null;
+    }
+  }
+  if (primaryColor !== undefined) {
+    if (primaryColor && typeof primaryColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(primaryColor)) {
+      data.primaryColor = primaryColor;
+    } else {
+      data.primaryColor = null;
+    }
+  }
 
-  const org = await prisma.organization.update({
-    where: { id: orgId },
-    data: { name: name.trim().slice(0, 80) },
-  });
+  const org = await prisma.organization.update({ where: { id: orgId }, data });
 
   await logActivity({
     organizationId: orgId,
     userId: req.user?.id,
     action: 'ORG_UPDATED',
-    details: `name -> ${org.name}`,
+    details: Object.keys(data).join(','),
     ip: req.ip,
   });
 
+  return res.json({
+    id: org.id,
+    name: org.name,
+    slug: org.slug,
+    plan: org.plan,
+    logo: org.logo,
+    primaryColor: org.primaryColor,
+  });
+});
+
+// GET /api/organization/branding — public-ish branding (used by frontend on every page)
+router.get('/branding', async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const org = await prisma.organization.findUnique({
+    where: { id: orgId },
+    select: { name: true, logo: true, primaryColor: true },
+  });
   return res.json(org);
 });
 

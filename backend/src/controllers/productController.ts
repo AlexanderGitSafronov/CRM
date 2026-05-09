@@ -96,6 +96,7 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
       purchasePrice: parseFloat(purchasePrice) || 0,
       salePrice: parseFloat(salePrice) || 0,
       stock: parseInt(stock) || 0,
+      lowStockThreshold: req.body.lowStockThreshold !== undefined ? Math.max(0, parseInt(req.body.lowStockThreshold)) : 5,
       image: image?.trim() || null,
     },
   });
@@ -116,7 +117,7 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
 export const updateProduct = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const { id } = req.params;
-  const { name, sku, description, purchasePrice, salePrice, stock, image, active } = req.body;
+  const { name, sku, description, purchasePrice, salePrice, stock, lowStockThreshold, image, active } = req.body;
 
   const existing = await prisma.product.findFirst({ where: { id, organizationId: orgId }, select: { id: true } });
   if (!existing) return res.status(404).json({ error: 'Товар не найден' });
@@ -129,7 +130,8 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
       ...(description !== undefined && { description: description?.trim() || null }),
       ...(purchasePrice !== undefined && { purchasePrice: parseFloat(purchasePrice) }),
       ...(salePrice !== undefined && { salePrice: parseFloat(salePrice) }),
-      ...(stock !== undefined && { stock: parseInt(stock) }),
+      ...(stock !== undefined && { stock: parseInt(stock), lowStockNotifiedAt: null }),
+      ...(lowStockThreshold !== undefined && { lowStockThreshold: Math.max(0, parseInt(lowStockThreshold)) }),
       ...(image !== undefined && { image: image?.trim() || null }),
       ...(active !== undefined && { active: Boolean(active) }),
     },

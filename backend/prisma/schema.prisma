@@ -32,6 +32,10 @@ model Organization {
   trialEndsAt          DateTime?
   currentPeriodEnd     DateTime?
 
+  // Branding
+  logo         String?  // data URL (base64) or external URL, max ~200KB after client-side resize
+  primaryColor String?  // hex e.g. "#3b82f6"; null = default blue
+
   users           User[]
   customers       Customer[]
   products        Product[]
@@ -45,6 +49,7 @@ model Organization {
   ccPayments      CcPayment[]
   passwordResets  PasswordReset[]
   emailVerifications EmailVerification[]
+  orderTemplates  OrderTemplate[]
 
   @@map("organizations")
 }
@@ -96,16 +101,18 @@ model Customer {
 }
 
 model Product {
-  id             String   @id @default(cuid())
-  organizationId String
-  name           String
-  sku            String?
-  description    String?
-  purchasePrice  Float    @default(0)
-  salePrice      Float    @default(0)
-  stock          Int      @default(0)
-  image          String?
-  active         Boolean  @default(true)
+  id                 String   @id @default(cuid())
+  organizationId     String
+  name               String
+  sku                String?
+  description        String?
+  purchasePrice      Float    @default(0)
+  salePrice          Float    @default(0)
+  stock              Int      @default(0)
+  lowStockThreshold  Int      @default(5)
+  image              String?  @db.Text
+  active             Boolean  @default(true)
+  lowStockNotifiedAt DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -315,6 +322,23 @@ model EmailVerification {
 
   @@index([userId])
   @@map("email_verifications")
+}
+
+// Order template — reusable preset for fast order creation (e.g. "kit of 3 items")
+model OrderTemplate {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  items          String   // JSON-serialized array of { productId?, name, quantity, price }
+  source         String?  // optional default source
+  comment        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("order_templates")
 }
 
 model PasswordReset {

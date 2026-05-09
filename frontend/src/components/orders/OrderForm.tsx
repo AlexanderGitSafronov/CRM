@@ -5,7 +5,7 @@ import api from '@/lib/api';
 import Modal from '@/components/ui/Modal';
 import toast from 'react-hot-toast';
 import type { Order, Product, User } from '@/types';
-import { Plus, Trash2, Search, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, Search, AlertCircle, FileText } from 'lucide-react';
 
 interface CustomerSuggestion {
   id: string;
@@ -95,17 +95,39 @@ export default function OrderForm({ open, onClose, onSuccess, order }: OrderForm
     }
   }, [open, order]);
 
+  const [templates, setTemplates] = useState<Array<{
+    id: string; name: string;
+    items: Array<{ productId?: string; name: string; quantity: number; price: number }>;
+    source?: string | null; comment?: string | null;
+  }>>([]);
+
   useEffect(() => {
     if (open) {
       Promise.all([
         api.get('/products', { params: { active: true, limit: 200 } }),
         api.get('/users').catch(() => ({ data: [] })),
-      ]).then(([p, u]) => {
+        api.get('/order-templates').catch(() => ({ data: [] })),
+      ]).then(([p, u, t]) => {
         setProducts(p.data.products);
         setManagers(u.data || []);
+        setTemplates(t.data || []);
       }).catch(() => {});
     }
   }, [open]);
+
+  const applyTemplate = (id: string) => {
+    const t = templates.find((x) => x.id === id);
+    if (!t) return;
+    setItems(t.items.map((it) => ({
+      productId: it.productId,
+      name: it.name,
+      quantity: it.quantity,
+      price: it.price,
+    })));
+    if (t.source) setSource(t.source);
+    if (t.comment) setComment(t.comment);
+    toast.success(`Шаблон "${t.name}" застосовано`);
+  };
 
   // Reactive customer autocomplete (phone or name)
   const [suggestions, setSuggestions] = useState<CustomerSuggestion[]>([]);
@@ -270,6 +292,24 @@ export default function OrderForm({ open, onClose, onSuccess, order }: OrderForm
                 />
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Quick template picker */}
+        {!order && templates.length > 0 && (
+          <div className="flex items-center gap-2 flex-wrap p-3 rounded-lg bg-violet-50 dark:bg-violet-950/20 border border-violet-200 dark:border-violet-900/40">
+            <FileText className="w-4 h-4 text-violet-600 dark:text-violet-400 shrink-0" />
+            <span className="text-xs text-violet-700 dark:text-violet-300 font-medium mr-1">Шаблон:</span>
+            {templates.slice(0, 6).map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => applyTemplate(t.id)}
+                className="px-2.5 py-1 rounded-md text-xs bg-white dark:bg-gray-800 border border-violet-200 dark:border-violet-900/40 text-violet-700 dark:text-violet-300 hover:bg-violet-100 dark:hover:bg-violet-900/30 transition-colors"
+              >
+                {t.name}
+              </button>
+            ))}
           </div>
         )}
 

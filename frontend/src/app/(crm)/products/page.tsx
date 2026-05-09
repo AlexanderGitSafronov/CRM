@@ -18,7 +18,10 @@ import {
   AlertTriangle,
   TrendingUp,
   X,
+  Upload,
 } from 'lucide-react';
+import CsvImport from '@/components/CsvImport';
+import ImageUploader from '@/components/ImageUploader';
 
 interface ProductForm {
   name: string;
@@ -27,6 +30,8 @@ interface ProductForm {
   purchasePrice: string;
   salePrice: string;
   stock: string;
+  lowStockThreshold: string;
+  image: string;
 }
 
 const EMPTY_FORM: ProductForm = {
@@ -36,6 +41,8 @@ const EMPTY_FORM: ProductForm = {
   purchasePrice: '',
   salePrice: '',
   stock: '0',
+  lowStockThreshold: '5',
+  image: '',
 };
 
 export default function ProductsPage() {
@@ -51,6 +58,7 @@ export default function ProductsPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<ProductForm>(EMPTY_FORM);
+  const [importOpen, setImportOpen] = useState(false);
 
   const fetchProducts = useCallback(async () => {
     setLoading(true);
@@ -83,6 +91,8 @@ export default function ProductsPage() {
       purchasePrice: product.purchasePrice.toString(),
       salePrice: product.salePrice.toString(),
       stock: product.stock.toString(),
+      lowStockThreshold: ((product as Product & { lowStockThreshold?: number }).lowStockThreshold ?? 5).toString(),
+      image: product.image || '',
     });
     setShowForm(true);
   };
@@ -136,12 +146,18 @@ export default function ProductsPage() {
           <p className="text-sm text-gray-400">{pagination.total} товаров · Склад: {formatCurrency(totalValue)}</p>
         </div>
         {canEdit && (
-          <button onClick={openCreate} className="btn-primary">
-            <Plus className="w-4 h-4" />
-            Добавить товар
-          </button>
+          <div className="flex gap-2">
+            <button onClick={() => setImportOpen(true)} className="btn-secondary">
+              <Upload className="w-4 h-4" /> Імпорт CSV
+            </button>
+            <button onClick={openCreate} className="btn-primary">
+              <Plus className="w-4 h-4" />
+              Добавить товар
+            </button>
+          </div>
         )}
       </div>
+      <CsvImport open={importOpen} onClose={() => setImportOpen(false)} endpoint="/import/products" onSuccess={fetchProducts} />
 
       <div className="card p-3 flex gap-3">
         <div className="relative flex-1">
@@ -196,11 +212,21 @@ export default function ProductsPage() {
                     className="border-b border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors"
                   >
                     <td className="p-4">
-                      <div>
-                        <p className="font-medium text-gray-900 dark:text-white">{product.name}</p>
-                        {product.description && (
-                          <p className="text-xs text-gray-400 truncate max-w-[200px]">{product.description}</p>
+                      <div className="flex items-center gap-3">
+                        {product.image ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={product.image} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" />
+                        ) : (
+                          <div className="w-10 h-10 rounded-lg bg-gray-100 dark:bg-gray-800 flex items-center justify-center shrink-0">
+                            <Package className="w-4 h-4 text-gray-400" />
+                          </div>
                         )}
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-900 dark:text-white truncate">{product.name}</p>
+                          {product.description && (
+                            <p className="text-xs text-gray-400 truncate max-w-[200px]">{product.description}</p>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="p-4 hidden sm:table-cell">
@@ -361,6 +387,27 @@ export default function ProductsPage() {
               )}
             </div>
           )}
+          <div>
+            <label className="label">Поріг закінчення (для алертів)</label>
+            <input
+              className="input"
+              type="number"
+              min="0"
+              value={form.lowStockThreshold}
+              onChange={(e) => setForm((p) => ({ ...p, lowStockThreshold: e.target.value }))}
+              placeholder="5"
+            />
+            <p className="text-xs text-gray-400 mt-1">Якщо залишок ≤ цього значення — щоденний алерт у Telegram</p>
+          </div>
+          <ImageUploader
+            label="Фото товару"
+            value={form.image || null}
+            onChange={(url) => setForm((p) => ({ ...p, image: url || '' }))}
+            maxDim={600}
+            maxBytes={300_000}
+            shape="rounded"
+            hint="JPG/PNG, ≤600px, ~300KB"
+          />
           <div>
             <label className="label">Описание</label>
             <textarea

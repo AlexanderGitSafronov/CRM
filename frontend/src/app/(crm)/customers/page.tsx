@@ -6,7 +6,8 @@ import api from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import Pagination from '@/components/ui/Pagination';
 import type { Customer, Pagination as PaginationType } from '@/types';
-import { Search, Users, Phone, Mail, MapPin, TrendingUp, RefreshCw, X, ShieldAlert } from 'lucide-react';
+import { Search, Users, Phone, Mail, MapPin, TrendingUp, RefreshCw, X, ShieldAlert, Upload } from 'lucide-react';
+import CsvImport from '@/components/CsvImport';
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -38,6 +39,8 @@ export default function CustomersPage() {
     searchTimer.current = setTimeout(() => setPage(1), 400);
   };
 
+  const [importOpen, setImportOpen] = useState(false);
+
   return (
     <div className="p-4 sm:p-6 space-y-4">
       <div className="flex items-center justify-between">
@@ -45,7 +48,11 @@ export default function CustomersPage() {
           <h1 className="text-xl font-bold text-gray-900 dark:text-white">Клиенты</h1>
           <p className="text-sm text-gray-400">{pagination.total} клиентов</p>
         </div>
+        <button onClick={() => setImportOpen(true)} className="btn-secondary">
+          <Upload className="w-4 h-4" /> Імпорт CSV
+        </button>
       </div>
+      <CsvImport open={importOpen} onClose={() => setImportOpen(false)} endpoint="/import/customers" onSuccess={fetchCustomers} />
 
       <div className="card p-3 flex gap-3">
         <div className="relative flex-1">

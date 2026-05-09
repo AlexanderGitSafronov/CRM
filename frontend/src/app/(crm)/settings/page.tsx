@@ -22,8 +22,12 @@ import {
   Package,
   Loader2,
   MessageSquare,
+  Palette,
+  FileText,
 } from 'lucide-react';
 import NovaPoshtaSelect from '@/components/nova-poshta/NovaPoshtaSelect';
+import ImageUploader from '@/components/ImageUploader';
+import { useBrandingStore } from '@/stores/brandingStore';
 
 interface WebhookToken {
   id: string;
@@ -170,7 +174,7 @@ interface Integration {
 
 export default function SettingsPage() {
   const { user: currentUser } = useAuthStore();
-  const [activeTab, setActiveTab] = useState<'users' | 'webhooks' | 'integrations'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'webhooks' | 'integrations' | 'branding' | 'templates'>('users');
   const [users, setUsers] = useState<User[]>([]);
   const [webhooks, setWebhooks] = useState<WebhookToken[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
@@ -501,9 +505,11 @@ export default function SettingsPage() {
       <h1 className="text-xl font-bold text-gray-900 dark:text-white">Настройки</h1>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg w-fit">
+      <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg w-fit overflow-x-auto">
         {([
           { key: 'users', label: 'Пользователи', icon: Users },
+          { key: 'branding', label: 'Брендинг', icon: Palette },
+          { key: 'templates', label: 'Шаблоны', icon: FileText },
           { key: 'webhooks', label: 'Webhook API', icon: Webhook },
           { key: 'integrations', label: 'Интеграции', icon: Bot },
         ] as const).map(({ key, label, icon: Icon }) => (
@@ -593,6 +599,12 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+
+      {/* Branding tab */}
+      {activeTab === 'branding' && <BrandingTab />}
+
+      {/* Templates tab */}
+      {activeTab === 'templates' && <TemplatesTab />}
 
       {/* Webhooks tab */}
       {activeTab === 'webhooks' && (
@@ -1177,6 +1189,288 @@ export default function SettingsPage() {
         onConfirm={handleDeleteUser}
         message="Удалить пользователя? Его заказы останутся без менеджера."
       />
+    </div>
+  );
+}
+
+// ============================== BRANDING TAB ==============================
+function BrandingTab() {
+  const { branding, fetch: fetchBranding, set: setBranding } = useBrandingStore();
+  const [orgName, setOrgName] = useState('');
+  const [logo, setLogo] = useState<string | null>(null);
+  const [color, setColor] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!branding) fetchBranding();
+  }, [branding, fetchBranding]);
+
+  useEffect(() => {
+    if (branding) {
+      setOrgName(branding.name || '');
+      setLogo(branding.logo || null);
+      setColor(branding.primaryColor || '');
+    }
+  }, [branding]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const res = await api.put('/organization', {
+        name: orgName || undefined,
+        logo: logo === '' ? null : logo,
+        primaryColor: color || null,
+      });
+      setBranding({ name: res.data.name, logo: res.data.logo, primaryColor: res.data.primaryColor });
+      toast.success('Брендинг збережено');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+      toast.error(msg);
+    }
+    setSaving(false);
+  };
+
+  const PRESETS = ['#2563eb', '#9333ea', '#db2777', '#f59e0b', '#10b981', '#0ea5e9', '#ef4444', '#6366f1'];
+
+  return (
+    <div className="space-y-4">
+      <div className="card p-5">
+        <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Назва воркспейсу</h3>
+        <input
+          className="input max-w-md"
+          value={orgName}
+          onChange={(e) => setOrgName(e.target.value)}
+          placeholder="Моя компанія"
+          maxLength={80}
+        />
+      </div>
+
+      <div className="card p-5">
+        <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Логотип</h3>
+        <ImageUploader
+          value={logo}
+          onChange={setLogo}
+          maxDim={256}
+          maxBytes={150_000}
+          shape="rounded"
+          hint="PNG/JPG, обрізається до 256×256, ~150KB"
+        />
+      </div>
+
+      <div className="card p-5">
+        <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Основний колір</h3>
+        <div className="flex items-center gap-3 flex-wrap">
+          <input
+            type="color"
+            value={color || '#2563eb'}
+            onChange={(e) => setColor(e.target.value)}
+            className="w-14 h-10 rounded-lg border border-gray-200 dark:border-gray-700 cursor-pointer"
+          />
+          <input
+            className="input w-32 font-mono uppercase"
+            value={color}
+            onChange={(e) => setColor(e.target.value)}
+            placeholder="#2563eb"
+            maxLength={7}
+          />
+          {color && (
+            <button onClick={() => setColor('')} className="text-sm text-gray-400 hover:text-gray-700">
+              Скинути
+            </button>
+          )}
+          <div className="flex gap-1.5 flex-wrap ml-auto">
+            {PRESETS.map((p) => (
+              <button
+                key={p}
+                onClick={() => setColor(p)}
+                style={{ background: p }}
+                className={`w-7 h-7 rounded-md border-2 transition-transform ${color === p ? 'border-gray-900 dark:border-white scale-110' : 'border-transparent hover:scale-105'}`}
+                title={p}
+              />
+            ))}
+          </div>
+        </div>
+        <p className="text-xs text-gray-400 mt-3">
+          Колір застосовується до всіх кнопок і акцентів. Зміни видно одразу.
+        </p>
+      </div>
+
+      <button onClick={save} disabled={saving} className="btn-primary">
+        {saving ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : 'Зберегти брендинг'}
+      </button>
+    </div>
+  );
+}
+
+// ============================== TEMPLATES TAB ==============================
+interface OrderTpl {
+  id: string;
+  name: string;
+  items: Array<{ productId?: string; name: string; quantity: number; price: number }>;
+  source?: string | null;
+  comment?: string | null;
+}
+
+function TemplatesTab() {
+  const [templates, setTemplates] = useState<OrderTpl[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [edit, setEdit] = useState<OrderTpl | null>(null);
+  const [name, setName] = useState('');
+  const [items, setItems] = useState<Array<{ name: string; quantity: number; price: number }>>([{ name: '', quantity: 1, price: 0 }]);
+  const [saving, setSaving] = useState(false);
+
+  const fetchAll = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get('/order-templates');
+      setTemplates(res.data);
+    } catch {}
+    setLoading(false);
+  };
+  useEffect(() => { fetchAll(); }, []);
+
+  const openNew = () => {
+    setEdit(null);
+    setName('');
+    setItems([{ name: '', quantity: 1, price: 0 }]);
+    setShowForm(true);
+  };
+
+  const openEdit = (t: OrderTpl) => {
+    setEdit(t);
+    setName(t.name);
+    setItems(t.items.map((i) => ({ name: i.name, quantity: i.quantity, price: i.price })));
+    setShowForm(true);
+  };
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) { toast.error('Назва обов\'язкова'); return; }
+    if (!items.length || items.some((i) => !i.name.trim())) { toast.error('Заповніть товари'); return; }
+    setSaving(true);
+    try {
+      if (edit) {
+        await api.put(`/order-templates/${edit.id}`, { name, items });
+      } else {
+        await api.post('/order-templates', { name, items });
+      }
+      toast.success(edit ? 'Шаблон оновлено' : 'Шаблон створено');
+      setShowForm(false);
+      fetchAll();
+    } catch {
+      toast.error('Помилка');
+    }
+    setSaving(false);
+  };
+
+  const remove = async (id: string) => {
+    if (!confirm('Видалити шаблон?')) return;
+    try { await api.delete(`/order-templates/${id}`); toast.success('Видалено'); fetchAll(); } catch {}
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="card overflow-hidden">
+        <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-800">
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white">Шаблони замовлень</h3>
+            <p className="text-xs text-gray-500 mt-0.5">Готові набори товарів для швидкого створення заказу</p>
+          </div>
+          <button onClick={openNew} className="btn-primary">
+            <Plus className="w-4 h-4" /> Новий шаблон
+          </button>
+        </div>
+        <div className="divide-y divide-gray-50 dark:divide-gray-800/50">
+          {loading ? (
+            <p className="p-8 text-center text-gray-400">Завантаження…</p>
+          ) : templates.length === 0 ? (
+            <p className="p-8 text-center text-gray-400 text-sm">Шаблонів ще немає</p>
+          ) : (
+            templates.map((t) => {
+              const total = t.items.reduce((s, i) => s + i.quantity * i.price, 0);
+              return (
+                <div key={t.id} className="flex items-center gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
+                  <div className="w-9 h-9 rounded-lg bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center shrink-0">
+                    <FileText className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm text-gray-900 dark:text-white">{t.name}</p>
+                    <p className="text-xs text-gray-500 truncate">
+                      {t.items.length} товарів · {total.toLocaleString('uk-UA')} ₴
+                    </p>
+                  </div>
+                  <button onClick={() => openEdit(t)} className="p-1.5 text-gray-400 hover:text-primary-600 rounded">
+                    <Edit className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => remove(t.id)} className="p-1.5 text-gray-400 hover:text-rose-500 rounded">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      <Modal open={showForm} onClose={() => setShowForm(false)} title={edit ? 'Редагувати шаблон' : 'Новий шаблон'} size="md">
+        <form onSubmit={save} className="space-y-4">
+          <div>
+            <label className="label">Назва *</label>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Комплект з 3 товарів" required />
+          </div>
+          <div>
+            <label className="label">Товари</label>
+            <div className="space-y-2">
+              {items.map((it, idx) => (
+                <div key={idx} className="flex gap-2">
+                  <input
+                    className="input text-sm flex-1"
+                    value={it.name}
+                    onChange={(e) => setItems((p) => p.map((x, i) => i === idx ? { ...x, name: e.target.value } : x))}
+                    placeholder="Назва"
+                  />
+                  <input
+                    className="input text-sm w-20"
+                    type="number"
+                    min="1"
+                    value={it.quantity}
+                    onChange={(e) => setItems((p) => p.map((x, i) => i === idx ? { ...x, quantity: parseInt(e.target.value) || 1 } : x))}
+                  />
+                  <input
+                    className="input text-sm w-24"
+                    type="number"
+                    step="0.01"
+                    value={it.price}
+                    onChange={(e) => setItems((p) => p.map((x, i) => i === idx ? { ...x, price: parseFloat(e.target.value) || 0 } : x))}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setItems((p) => p.filter((_, i) => i !== idx))}
+                    disabled={items.length === 1}
+                    className="p-2 text-gray-400 hover:text-rose-500 disabled:opacity-30"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setItems((p) => [...p, { name: '', quantity: 1, price: 0 }])}
+              className="text-sm text-primary-600 hover:underline mt-2 flex items-center gap-1"
+            >
+              <Plus className="w-3.5 h-3.5" /> Додати рядок
+            </button>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={() => setShowForm(false)} className="btn-secondary flex-1 justify-center">Скасувати</button>
+            <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
+              {saving ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : edit ? 'Зберегти' : 'Створити'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

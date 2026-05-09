@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/stores/authStore';
+import { useBrandingStore } from '@/stores/brandingStore';
 import { cn } from '@/lib/utils';
 import {
   BarChart3,
@@ -46,6 +47,7 @@ interface SidebarProps {
 export default function Sidebar({ open, onClose, unreadNotifications = 0 }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
+  const { branding } = useBrandingStore();
 
   const filteredItems = navItems.filter(
     (item) => !item.roles || (user && item.roles.includes(user.role))
@@ -71,11 +73,18 @@ export default function Sidebar({ open, onClose, unreadNotifications = 0 }: Side
       >
         {/* Logo */}
         <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-800">
-          <Link href="/dashboard" className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-primary-600 flex items-center justify-center">
-              <Zap className="w-4 h-4 text-white" />
-            </div>
-            <span className="font-bold text-lg text-gray-900 dark:text-white">CRM Pro</span>
+          <Link href="/dashboard" className="flex items-center gap-2.5 min-w-0">
+            {branding?.logo ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={branding.logo} alt="" className="w-8 h-8 rounded-lg object-cover shrink-0" />
+            ) : (
+              <div className="w-8 h-8 rounded-lg bg-primary-600 flex items-center justify-center shrink-0">
+                <Zap className="w-4 h-4 text-white" />
+              </div>
+            )}
+            <span className="font-bold text-lg text-gray-900 dark:text-white truncate">
+              {branding?.name || 'CRM Pro'}
+            </span>
           </Link>
           <button
             onClick={onClose}

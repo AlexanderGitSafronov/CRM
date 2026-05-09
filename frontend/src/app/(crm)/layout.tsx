@@ -7,6 +7,7 @@ import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
 import SearchPalette from '@/components/SearchPalette';
 import { CelebrationListener } from '@/components/CelebrationListener';
+import { BrandingApplier } from '@/components/BrandingApplier';
 import api from '@/lib/api';
 
 function playChime() {
@@ -144,6 +145,7 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
 
       <SearchPalette />
       <CelebrationListener />
+      <BrandingApplier />
     </div>
   );
 }

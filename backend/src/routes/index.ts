@@ -15,6 +15,8 @@ import callbackRoutes from './callbacks';
 import telegramRoutes from './telegram';
 import organizationRoutes from './organization';
 import searchRoutes from './search';
+import orderTemplateRoutes from './orderTemplates';
+import importRoutes from './import';
 
 const router = Router();
 
@@ -34,5 +36,7 @@ router.use('/callbacks', callbackRoutes);
 router.use('/telegram', telegramRoutes);
 router.use('/organization', organizationRoutes);
 router.use('/search', searchRoutes);
+router.use('/order-templates', orderTemplateRoutes);
+router.use('/import', importRoutes);
 
 export default router;
