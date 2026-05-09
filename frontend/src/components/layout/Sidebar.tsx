@@ -17,6 +17,7 @@ import {
   X,
   Zap,
   Wallet,
+  Target,
 } from 'lucide-react';
 
 interface NavItem {
@@ -33,6 +34,7 @@ const navItems: NavItem[] = [
   { href: '/customers', label: 'Клиенты', icon: Users },
   { href: '/products', label: 'Товары', icon: Package },
   { href: '/analytics', label: 'Аналитика', icon: TrendingUp, roles: ['ADMIN', 'MANAGER'] },
+  { href: '/goals', label: 'Цели', icon: Target, roles: ['ADMIN', 'MANAGER'] },
   { href: '/analytics/cc-payroll', label: 'Зарплата КЦ', icon: Wallet, roles: ['ADMIN'] },
   { href: '/notifications', label: 'Уведомления', icon: Bell },
   { href: '/settings', label: 'Настройки', icon: Settings, roles: ['ADMIN'] },

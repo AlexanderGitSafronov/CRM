@@ -36,6 +36,7 @@ import PlanUsage from '@/components/PlanUsage';
 import Sparkline from '@/components/Sparkline';
 import SlaBadge from '@/components/SlaBadge';
 import AchievementsCard from '@/components/AchievementsCard';
+import GoalsCard from '@/components/GoalsCard';
 import dynamic from 'next/dynamic';
 
 // Leaflet is browser-only — dynamically loaded with no SSR
@@ -343,6 +344,9 @@ export default function DashboardPage() {
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* Goals */}
+      <GoalsCard />
 
       {/* Plan usage */}
       <PlanUsage />

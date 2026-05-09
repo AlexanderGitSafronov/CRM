@@ -51,8 +51,45 @@ model Organization {
   emailVerifications EmailVerification[]
   orderTemplates  OrderTemplate[]
   achievements    Achievement[]
+  salesGoals      SalesGoal[]
+  orderViews      OrderView[]
 
   @@map("organizations")
+}
+
+model SalesGoal {
+  id             String   @id @default(cuid())
+  organizationId String
+  period         String   // MONTH, QUARTER, YEAR
+  startDate      DateTime
+  endDate        DateTime
+  targetRevenue  Float    @default(0)
+  targetOrders   Int      @default(0)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([organizationId, active])
+  @@map("sales_goals")
+}
+
+model OrderView {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?  // null = shared across the org
+  name           String
+  filters        String   // JSON of filter params: status, managerId, source, dateFrom, dateTo, search
+  icon           String?  // optional emoji or lucide name
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("order_views")
 }
 
 model Achievement {

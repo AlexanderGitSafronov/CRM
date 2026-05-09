@@ -31,6 +31,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import SlaBadge from '@/components/SlaBadge';
+import SavedOrderViews, { OrderFilters } from '@/components/SavedOrderViews';
 
 const SLA_HOURS = 2;
 
@@ -61,6 +62,9 @@ export default function OrdersPage() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [page, setPage] = useState(1);
+
+  // Saved view
+  const [activeViewId, setActiveViewId] = useState<string | null>(null);
 
   // Selection
   const [selected, setSelected] = useState<string[]>([]);
@@ -229,6 +233,24 @@ export default function OrdersPage() {
     setDateFrom('');
     setDateTo('');
     setPage(1);
+    setActiveViewId(null);
+  };
+
+  const applyView = (f: OrderFilters) => {
+    setSearch(f.search || '');
+    setStatus(f.status || '');
+    setManagerId(f.managerId || '');
+    setDateFrom(f.dateFrom || '');
+    setDateTo(f.dateTo || '');
+    setPage(1);
+  };
+
+  const currentFilters: OrderFilters = {
+    ...(search && { search }),
+    ...(status && { status }),
+    ...(managerId && { managerId }),
+    ...(dateFrom && { dateFrom }),
+    ...(dateTo && { dateTo }),
   };
 
   const hasFilters = search || status || managerId || dateFrom || dateTo;
@@ -272,6 +294,14 @@ export default function OrdersPage() {
           )}
         </div>
       </div>
+
+      {/* Saved views */}
+      <SavedOrderViews
+        currentFilters={currentFilters}
+        onApply={applyView}
+        activeViewId={activeViewId}
+        onActiveViewChange={setActiveViewId}
+      />
 
       {/* Filters */}
       <div className="card p-3">

@@ -18,6 +18,8 @@ import searchRoutes from './search';
 import orderTemplateRoutes from './orderTemplates';
 import importRoutes from './import';
 import achievementRoutes from './achievements';
+import goalsRoutes from './goals';
+import orderViewsRoutes from './orderViews';
 
 const router = Router();
 
@@ -40,5 +42,7 @@ router.use('/search', searchRoutes);
 router.use('/order-templates', orderTemplateRoutes);
 router.use('/import', importRoutes);
 router.use('/achievements', achievementRoutes);
+router.use('/goals', goalsRoutes);
+router.use('/order-views', orderViewsRoutes);
 
 export default router;
