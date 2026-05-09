@@ -1,11 +1,23 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '@/lib/api';
 import Modal from '@/components/ui/Modal';
 import toast from 'react-hot-toast';
 import type { Order, Product, User } from '@/types';
-import { Plus, Trash2, Search } from 'lucide-react';
+import { Plus, Trash2, Search, AlertCircle } from 'lucide-react';
+
+interface CustomerSuggestion {
+  id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  city?: string;
+  address?: string;
+  isBlacklisted?: boolean;
+  blacklistReason?: string;
+  ordersCount: number;
+}
 
 interface OrderFormProps {
   open: boolean;
@@ -95,22 +107,45 @@ export default function OrderForm({ open, onClose, onSuccess, order }: OrderForm
     }
   }, [open]);
 
-  // Auto-fill customer from phone
-  const handlePhoneBlur = async () => {
-    if (customer.phone.length >= 10 && !order) {
+  // Reactive customer autocomplete (phone or name)
+  const [suggestions, setSuggestions] = useState<CustomerSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeFieldRef, setActiveFieldRef] = useState<'phone' | 'name' | null>(null);
+  const autocompleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchSuggestions = (q: string) => {
+    if (autocompleteTimer.current) clearTimeout(autocompleteTimer.current);
+    if (q.trim().length < 3) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    autocompleteTimer.current = setTimeout(async () => {
       try {
-        const res = await api.get('/customers', { params: { search: customer.phone } });
-        const found = res.data.customers[0];
-        if (found && found.phone === customer.phone) {
-          setCustomer((prev) => ({
-            ...prev,
-            name: found.name,
-            email: found.email || prev.email,
-            city: found.city || prev.city,
-          }));
-          toast.success(`Клиент найден: ${found.name}`);
-        }
-      } catch {}
+        const res = await api.get('/search/customers/lookup', { params: { phone: q.trim() } });
+        setSuggestions(res.data.customers || []);
+        setShowSuggestions(true);
+      } catch {
+        setSuggestions([]);
+        setShowSuggestions(false);
+      }
+    }, 200);
+  };
+
+  const pickCustomer = (s: CustomerSuggestion) => {
+    setCustomer({
+      name: s.name,
+      phone: s.phone,
+      email: s.email || '',
+      city: s.city || '',
+      address: s.address || '',
+    });
+    setShowSuggestions(false);
+    setActiveFieldRef(null);
+    if (s.isBlacklisted) {
+      toast.error(`⚠️ ЧОРНИЙ СПИСОК: ${s.blacklistReason || 'без причини'}`, { duration: 6000 });
+    } else {
+      toast.success(`Клієнт знайдений: ${s.name} (${s.ordersCount} замовл.)`);
     }
   };
 
@@ -171,26 +206,49 @@ export default function OrderForm({ open, onClose, onSuccess, order }: OrderForm
           <div>
             <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Клиент</h3>
             <div className="grid grid-cols-2 gap-3">
-              <div>
+              <div className="relative">
                 <label className="label">Телефон *</label>
                 <input
                   className="input"
                   value={customer.phone}
-                  onChange={(e) => setCustomer((p) => ({ ...p, phone: e.target.value }))}
-                  onBlur={handlePhoneBlur}
+                  onChange={(e) => {
+                    setCustomer((p) => ({ ...p, phone: e.target.value }));
+                    fetchSuggestions(e.target.value);
+                  }}
+                  onFocus={() => {
+                    setActiveFieldRef('phone');
+                    if (suggestions.length) setShowSuggestions(true);
+                  }}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                   placeholder="+380501234567"
                   required
+                  autoComplete="off"
                 />
+                {showSuggestions && activeFieldRef === 'phone' && suggestions.length > 0 && (
+                  <CustomerSuggestionList suggestions={suggestions} onPick={pickCustomer} />
+                )}
               </div>
-              <div>
+              <div className="relative">
                 <label className="label">Имя *</label>
                 <input
                   className="input"
                   value={customer.name}
-                  onChange={(e) => setCustomer((p) => ({ ...p, name: e.target.value }))}
+                  onChange={(e) => {
+                    setCustomer((p) => ({ ...p, name: e.target.value }));
+                    fetchSuggestions(e.target.value);
+                  }}
+                  onFocus={() => {
+                    setActiveFieldRef('name');
+                    if (suggestions.length) setShowSuggestions(true);
+                  }}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                   placeholder="Иван Петров"
                   required
+                  autoComplete="off"
                 />
+                {showSuggestions && activeFieldRef === 'name' && suggestions.length > 0 && (
+                  <CustomerSuggestionList suggestions={suggestions} onPick={pickCustomer} />
+                )}
               </div>
               <div>
                 <label className="label">Email</label>
@@ -380,5 +438,33 @@ export default function OrderForm({ open, onClose, onSuccess, order }: OrderForm
         </div>
       </form>
     </Modal>
+  );
+}
+
+function CustomerSuggestionList({
+  suggestions, onPick,
+}: { suggestions: CustomerSuggestion[]; onPick: (s: CustomerSuggestion) => void }) {
+  return (
+    <div className="absolute top-full left-0 right-0 mt-1 z-20 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+      {suggestions.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          onMouseDown={(e) => { e.preventDefault(); onPick(s); }}
+          className={`w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center gap-2 ${
+            s.isBlacklisted ? 'bg-red-50 dark:bg-red-900/10' : ''
+          }`}
+        >
+          {s.isBlacklisted && <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />}
+          <div className="flex-1 min-w-0">
+            <p className="font-medium text-sm text-gray-900 dark:text-white truncate">{s.name}</p>
+            <p className="text-xs text-gray-500 truncate">
+              {s.phone}{s.city ? ` · ${s.city}` : ''}
+            </p>
+          </div>
+          <span className="text-xs text-gray-400 shrink-0">{s.ordersCount} зам.</span>
+        </button>
+      ))}
+    </div>
   );
 }

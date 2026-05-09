@@ -1,6 +1,7 @@
 'use client';
 
-import { Menu, Sun, Moon, Volume2, VolumeX } from 'lucide-react';
+import { Menu, Sun, Moon, Volume2, VolumeX, Search } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useThemeStore } from '@/stores/themeStore';
 
 interface HeaderProps {
@@ -12,6 +13,15 @@ interface HeaderProps {
 
 export default function Header({ onMenuToggle, title, soundEnabled = true, onSoundToggle }: HeaderProps) {
   const { theme, toggleTheme } = useThemeStore();
+  const [isMac, setIsMac] = useState(false);
+
+  useEffect(() => {
+    setIsMac(/Mac/i.test(navigator.platform || ''));
+  }, []);
+
+  const openSearch = () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, ctrlKey: true, bubbles: true }));
+  };
 
   return (
     <header className="h-14 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 flex items-center px-4 gap-3 sticky top-0 z-30">
@@ -27,6 +37,25 @@ export default function Header({ onMenuToggle, title, soundEnabled = true, onSou
       )}
 
       <div className="flex-1" />
+
+      {/* Global search button */}
+      <button
+        onClick={openSearch}
+        className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600 transition-colors text-sm"
+      >
+        <Search className="w-4 h-4" />
+        <span>Пошук</span>
+        <kbd className="ml-3 inline-flex items-center px-1.5 py-0.5 rounded bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-[10px] font-mono text-gray-500">
+          {isMac ? '⌘' : 'Ctrl'}K
+        </kbd>
+      </button>
+      <button
+        onClick={openSearch}
+        className="sm:hidden p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+        title="Пошук"
+      >
+        <Search className="w-5 h-5" />
+      </button>
 
       {/* Sound toggle */}
       {onSoundToggle && (

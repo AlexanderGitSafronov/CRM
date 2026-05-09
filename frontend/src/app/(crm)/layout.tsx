@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/authStore';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
+import SearchPalette from '@/components/SearchPalette';
+import { CelebrationListener } from '@/components/CelebrationListener';
 import api from '@/lib/api';
 
 function playChime() {
@@ -86,6 +88,23 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
         window.dispatchEvent(new CustomEvent('dashboard:refresh'));
         if (soundEnabledRef.current) playChime();
       });
+      es.addEventListener('order_delivered', (ev) => {
+        try {
+          const data = JSON.parse((ev as MessageEvent).data || '{}');
+          window.dispatchEvent(new CustomEvent('celebrate', {
+            detail: { type: 'order_delivered', message: `🎉 Заказ #${data.orderNum ?? ''} доставлено!` },
+          }));
+        } catch {}
+        window.dispatchEvent(new CustomEvent('dashboard:refresh'));
+      });
+      es.addEventListener('milestone', (ev) => {
+        try {
+          const data = JSON.parse((ev as MessageEvent).data || '{}');
+          window.dispatchEvent(new CustomEvent('celebrate', {
+            detail: { type: 'milestone', message: data.message || '🎉 Нова досягнення!' },
+          }));
+        } catch {}
+      });
       es.onerror = () => { es?.close(); };
     }
 
@@ -122,6 +141,9 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+
+      <SearchPalette />
+      <CelebrationListener />
     </div>
   );
 }

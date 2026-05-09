@@ -27,7 +27,10 @@ import {
   RefreshCw,
   Clock,
   Truck,
+  UserCheck,
+  Trash2,
 } from 'lucide-react';
+import SlaBadge from '@/components/SlaBadge';
 
 const SLA_HOURS = 2;
 
@@ -139,6 +142,35 @@ export default function OrdersPage() {
       fetchOrders();
     } catch {
       toast.error('Ошибка при обновлении');
+    }
+  };
+
+  const [showBulkAssign, setShowBulkAssign] = useState(false);
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+
+  const handleBulkAssign = async (mid: string | null) => {
+    if (!selected.length) return;
+    try {
+      await api.post('/orders/bulk-assign', { ids: selected, managerId: mid });
+      toast.success(`Призначено: ${selected.length}`);
+      setSelected([]);
+      setShowBulkAssign(false);
+      fetchOrders();
+    } catch {
+      toast.error('Помилка призначення');
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!selected.length) return;
+    try {
+      const res = await api.post('/orders/bulk-delete', { ids: selected });
+      toast.success(`Видалено: ${res.data.deleted}`);
+      setSelected([]);
+      setBulkDeleteConfirm(false);
+      fetchOrders();
+    } catch {
+      toast.error('Помилка видалення');
     }
   };
 
@@ -334,20 +366,64 @@ export default function OrdersPage() {
             )}
           </div>
           {canEdit && (
-            <button
-              onClick={handleBulkTtn}
-              disabled={bulkTtnLoading}
-              className="btn-secondary text-sm flex items-center gap-1.5 text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-900/20"
-            >
-              <Truck className="w-3.5 h-3.5" />
-              {bulkTtnLoading ? 'Создание...' : 'Создать ТТН'}
-            </button>
+            <>
+              {/* Assign manager */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowBulkAssign(!showBulkAssign)}
+                  className="btn-secondary text-sm flex items-center gap-1.5"
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                  Призначити
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+                {showBulkAssign && (
+                  <div className="absolute top-full mt-1 left-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10 w-56 max-h-72 overflow-y-auto">
+                    <button
+                      onClick={() => handleBulkAssign(null)}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-500"
+                    >
+                      ✕ Зняти менеджера
+                    </button>
+                    <div className="border-t border-gray-100 dark:border-gray-700" />
+                    {managers.filter((m) => ['ADMIN', 'MANAGER', 'CALL_CENTER'].includes(m.role)).map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => handleBulkAssign(m.id)}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
+                      >
+                        {m.name} <span className="text-xs text-gray-400">({m.role})</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={handleBulkTtn}
+                disabled={bulkTtnLoading}
+                className="btn-secondary text-sm flex items-center gap-1.5 text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-900/20"
+              >
+                <Truck className="w-3.5 h-3.5" />
+                {bulkTtnLoading ? 'Створення...' : 'Створити ТТН'}
+              </button>
+
+              {user?.role === 'ADMIN' && (
+                <button
+                  onClick={() => setBulkDeleteConfirm(true)}
+                  className="btn-secondary text-sm flex items-center gap-1.5 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-800 hover:bg-rose-50 dark:hover:bg-rose-900/20"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Видалити
+                </button>
+              )}
+            </>
           )}
           <button
             onClick={() => setSelected([])}
             className="ml-auto text-sm text-gray-500 hover:text-gray-700"
           >
-            Отмена
+            Скасувати
           </button>
         </div>
       )}
@@ -428,16 +504,14 @@ export default function OrdersPage() {
                         />
                       </td>
                       <td className="p-3">
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <Link
                             href={`/orders/${order.id}`}
                             className="font-semibold text-primary-600 hover:underline text-sm"
                           >
                             #{order.orderNum}
                           </Link>
-                          {overdue && (
-                            <Clock className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
-                          )}
+                          <SlaBadge status={order.status} createdAt={order.createdAt} />
                         </div>
                       </td>
                       <td className="p-3">
@@ -521,6 +595,13 @@ export default function OrdersPage() {
         onConfirm={handleDelete}
         message="Вы уверены, что хотите удалить этот заказ? Это действие необратимо."
         loading={deleteLoading}
+      />
+
+      <ConfirmDialog
+        open={bulkDeleteConfirm}
+        onClose={() => setBulkDeleteConfirm(false)}
+        onConfirm={handleBulkDelete}
+        message={`Видалити ${selected.length} заказів? Це незворотно.`}
       />
     </div>
   );

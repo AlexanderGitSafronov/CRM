@@ -14,6 +14,7 @@ import novaPoshtaRoutes from './nova-poshta';
 import callbackRoutes from './callbacks';
 import telegramRoutes from './telegram';
 import organizationRoutes from './organization';
+import searchRoutes from './search';
 
 const router = Router();
 
@@ -32,5 +33,6 @@ router.use('/nova-poshta', novaPoshtaRoutes);
 router.use('/callbacks', callbackRoutes);
 router.use('/telegram', telegramRoutes);
 router.use('/organization', organizationRoutes);
+router.use('/search', searchRoutes);
 
 export default router;

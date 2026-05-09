@@ -5,6 +5,7 @@ import { createNotification, logActivity } from '../services/notifications';
 import { sendTelegramMessage } from '../services/telegram';
 import { sendIncomeToRashod } from '../services/rashodWebhook';
 import { sendSmsToCustomer, getTurboSmsConfig } from '../services/turbosms';
+import { broadcastEvent } from '../services/eventBus';
 import logger from '../utils/logger';
 
 export const trackerState = {
@@ -121,6 +122,7 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
                 orderId: order.id, orderNum: order.orderNum,
                 total: order.total, source: order.source, deliveredAt: new Date(),
               }).catch(() => {});
+              broadcastEvent(organizationId, 'order_delivered', { orderNum: order.orderNum, total: order.total });
             }
 
             if (status.crmStatus === 'RETURNED') {

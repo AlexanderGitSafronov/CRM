@@ -6,6 +6,44 @@ import { broadcastEvent } from '../services/eventBus';
 import { sendIncomeToRashod } from '../services/rashodWebhook';
 import { getNextManagerId } from '../services/roundRobin';
 
+// Milestones already announced (in-memory; resets on restart — acceptable noise)
+const announcedMilestones = new Set<string>();
+
+async function checkMilestones(orgId: string) {
+  try {
+    const [delivered, revenue] = await Promise.all([
+      prisma.order.count({ where: { organizationId: orgId, status: 'DELIVERED' } }),
+      prisma.order.aggregate({
+        where: { organizationId: orgId, status: 'DELIVERED' },
+        _sum: { total: true },
+      }),
+    ]);
+
+    const totalRevenue = revenue._sum.total ?? 0;
+
+    const candidates: Array<{ key: string; message: string }> = [];
+    // Order-count milestones
+    [1, 10, 100, 500, 1000, 5000].forEach((n) => {
+      if (delivered === n) candidates.push({ key: `${orgId}:delivered:${n}`, message: `🎉 ${n} доставлених замовлень!` });
+    });
+    // Revenue milestones (in UAH)
+    [10_000, 50_000, 100_000, 500_000, 1_000_000].forEach((n) => {
+      if (totalRevenue >= n && totalRevenue - 1 < n + 100_000) {
+        const key = `${orgId}:revenue:${n}`;
+        if (!announcedMilestones.has(key)) candidates.push({ key, message: `🎉 Виручка перевищила ${n.toLocaleString('uk-UA')} ₴!` });
+      }
+    });
+
+    for (const c of candidates) {
+      if (announcedMilestones.has(c.key)) continue;
+      announcedMilestones.add(c.key);
+      broadcastEvent(orgId, 'milestone', { message: c.message });
+    }
+  } catch {
+    /* non-fatal */
+  }
+}
+
 const ORDER_SELECT = {
   id: true,
   orderNum: true,
@@ -341,6 +379,9 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
       source: order.source,
       deliveredAt: new Date(),
     }).catch(() => {});
+    broadcastEvent(orgId, 'order_delivered', { orderNum: order.orderNum, total: order.total });
+    // Milestone: every 100 delivered orders, 10K/100K revenue
+    void checkMilestones(orgId);
   }
 
   await logActivity({
@@ -523,6 +564,70 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
   });
 
   return res.json({ updated: orders.length });
+};
+
+export const bulkAssignManager = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const { ids, managerId } = req.body as { ids: string[]; managerId: string | null };
+
+  if (!ids?.length) return res.status(400).json({ error: 'IDs required' });
+
+  // If manager set, verify they belong to this org
+  if (managerId) {
+    const m = await prisma.user.findFirst({ where: { id: managerId, organizationId: orgId } });
+    if (!m) return res.status(400).json({ error: 'Invalid manager' });
+  }
+
+  const orders = await prisma.order.findMany({
+    where: { id: { in: ids }, organizationId: orgId },
+    select: { id: true },
+  });
+
+  await prisma.order.updateMany({
+    where: { id: { in: orders.map((o) => o.id) }, organizationId: orgId },
+    data: { managerId: managerId || null },
+  });
+
+  await prisma.orderHistory.createMany({
+    data: orders.map((o) => ({
+      orderId: o.id,
+      action: 'MANAGER_CHANGED',
+      newValue: managerId || 'unassigned',
+      userId: req.user?.id,
+    })),
+  });
+
+  await logActivity({
+    organizationId: orgId,
+    userId: req.user?.id,
+    action: 'BULK_ASSIGN_MANAGER',
+    entityType: 'Order',
+    details: `${orders.length} orders → ${managerId || 'unassigned'}`,
+    ip: req.ip,
+  });
+
+  return res.json({ updated: orders.length });
+};
+
+export const bulkDelete = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const { ids } = req.body as { ids: string[] };
+  if (!ids?.length) return res.status(400).json({ error: 'IDs required' });
+
+  const result = await prisma.order.deleteMany({
+    where: { id: { in: ids }, organizationId: orgId },
+  });
+
+  await logActivity({
+    organizationId: orgId,
+    userId: req.user?.id,
+    action: 'BULK_DELETE',
+    entityType: 'Order',
+    details: `Deleted ${result.count} orders`,
+    ip: req.ip,
+  });
+
+  return res.json({ deleted: result.count });
 };
 
 export const getOrderHistory = async (req: AuthRequest, res: Response) => {

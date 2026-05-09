@@ -32,6 +32,9 @@ import {
   Bar,
 } from 'recharts';
 import { useAuthStore } from '@/stores/authStore';
+import PlanUsage from '@/components/PlanUsage';
+import Sparkline from '@/components/Sparkline';
+import SlaBadge from '@/components/SlaBadge';
 
 interface DayData {
   date: string;
@@ -175,15 +178,25 @@ export default function DashboardPage() {
       {/* KPI Strip */}
       {kpi && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="card p-4 flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center shrink-0">
-              <ShoppingCart className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          <div className="card p-4 flex flex-col gap-2">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center shrink-0">
+                <ShoppingCart className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-400">Сегодня заказов</p>
+                <p className="text-xl font-bold text-gray-900 dark:text-white">
+                  {kpi.today.orders}
+                  <span className="ml-1.5 inline-flex items-center px-1 py-0 rounded bg-emerald-500 text-white text-[9px] font-semibold align-middle animate-pulse">LIVE</span>
+                </p>
+                <p className="text-xs text-gray-400">{formatCurrency(kpi.today.revenue)}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-xs text-gray-400">Сегодня заказов</p>
-              <p className="text-xl font-bold text-gray-900 dark:text-white">{kpi.today.orders}</p>
-              <p className="text-xs text-gray-400">{formatCurrency(kpi.today.revenue)}</p>
-            </div>
+            {chartData.length > 1 && (
+              <div className="-mx-1 -mb-1">
+                <Sparkline data={chartData.slice(-7).map((d) => d.orders)} color="#3b82f6" height={24} />
+              </div>
+            )}
           </div>
 
           <div className="card p-4 flex items-center gap-3">
@@ -326,6 +339,9 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Plan usage */}
+      <PlanUsage />
+
       {/* Recent orders */}
       <div className="card">
         <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-800">
@@ -382,7 +398,10 @@ export default function DashboardPage() {
                     </span>
                   </td>
                   <td className="p-4">
-                    <StatusBadge status={order.status} />
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <StatusBadge status={order.status} />
+                      <SlaBadge status={order.status} createdAt={order.createdAt} />
+                    </div>
                   </td>
                   <td className="p-4 hidden md:table-cell">
                     <span className="text-sm text-gray-400">
