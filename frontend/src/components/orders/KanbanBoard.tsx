@@ -121,7 +121,7 @@ function DroppableColumn({
         className={cn(
           'kanban-column flex-1 rounded-lg p-2 min-h-[100px] transition-colors',
           isOver
-            ? 'bg-primary-50 dark:bg-primary-900/20 border-2 border-dashed border-primary-400'
+            ? 'bg-primary-50 dark:bg-primary-900/20 border-2 border-dashed border-primary-400 kanban-column-over'
             : 'bg-gray-100/80 dark:bg-gray-800/50'
         )}
       >

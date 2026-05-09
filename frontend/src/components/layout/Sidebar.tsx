@@ -103,11 +103,18 @@ export default function Sidebar({ open, onClose, unreadNotifications = 0 }: Side
               : pathname.startsWith(item.href);
             const badge = item.href === '/notifications' ? unreadNotifications : 0;
 
+            const tourKey = item.href === '/orders' ? 'orders'
+              : item.href === '/customers' ? 'customers'
+              : item.href === '/products' ? 'products'
+              : item.href === '/analytics' ? 'analytics'
+              : item.href === '/settings' ? 'settings'
+              : undefined;
             return (
               <Link
                 key={item.href}
                 href={item.href}
                 onClick={onClose}
+                data-tour={tourKey}
                 className={cn('sidebar-link', isActive && 'active')}
               >
                 <Icon className="w-4.5 h-4.5 shrink-0" />

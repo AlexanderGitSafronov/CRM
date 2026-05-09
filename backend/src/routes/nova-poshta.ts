@@ -357,4 +357,36 @@ router.post('/sla/run', requireRole('ADMIN'), async (_req: AuthRequest, res: Res
   return res.json({ message: 'SLA перевірку запущено вручну' });
 });
 
+// GET /api/nova-poshta/print-ttn?orderId=xxx&format=pdf|html&size=100x100|A4
+// Returns the URL to a printable TTN — frontend opens it in a new tab.
+router.get('/print-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const { orderId } = req.query as { orderId?: string };
+  const format = (req.query.format as string) === 'html' ? 'html' : 'pdf';
+  const size = (req.query.size as string) === 'A4' ? 'A4' : '100x100';
+  if (!orderId) return res.status(400).json({ error: 'orderId required' });
+
+  const order = await prisma.order.findFirst({
+    where: { id: orderId, organizationId: orgId },
+    select: { trackingNumber: true },
+  });
+  if (!order) return res.status(404).json({ error: 'Замовлення не знайдено' });
+  if (!order.trackingNumber) return res.status(400).json({ error: 'У замовлення немає ТТН' });
+
+  // Per-org NP API key
+  const integration = await prisma.integration.findUnique({
+    where: { organizationId_type: { organizationId: orgId, type: 'NOVA_POSHTA_SENDER' } },
+  });
+  const apiKey = integration?.active
+    ? (JSON.parse(integration.config) as { apiKey?: string }).apiKey || ''
+    : process.env.NP_API_KEY || '';
+  if (!apiKey) return res.status(400).json({ error: 'NP API key не задано' });
+
+  // NP printing URL: GET /v2.0/printDocument/{apiKey}/orders[]/{format}/{size}
+  // Returns the PDF/HTML directly when accessed.
+  const sizePath = size === 'A4' ? '' : `/100x100`;
+  const url = `https://my.novaposhta.ua/orders/printDocument/orders[]/${order.trackingNumber}/type/${format}/apiKey/${apiKey}${sizePath}`;
+  return res.json({ url });
+});
+
 export default router;

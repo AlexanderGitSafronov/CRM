@@ -50,8 +50,25 @@ model Organization {
   passwordResets  PasswordReset[]
   emailVerifications EmailVerification[]
   orderTemplates  OrderTemplate[]
+  achievements    Achievement[]
 
   @@map("organizations")
+}
+
+model Achievement {
+  id             String   @id @default(cuid())
+  organizationId String
+  code           String   // e.g. 'delivered_100', 'revenue_1m'
+  title          String
+  description    String?
+  icon           String?  // lucide icon name
+  achievedAt     DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("achievements")
 }
 
 model User {

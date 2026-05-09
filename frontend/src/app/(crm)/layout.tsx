@@ -8,6 +8,7 @@ import Header from '@/components/layout/Header';
 import SearchPalette from '@/components/SearchPalette';
 import { CelebrationListener } from '@/components/CelebrationListener';
 import { BrandingApplier } from '@/components/BrandingApplier';
+import { WelcomeTour } from '@/components/WelcomeTour';
 import api from '@/lib/api';
 
 function playChime() {
@@ -106,6 +107,15 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
           }));
         } catch {}
       });
+      es.addEventListener('achievement_unlocked', (ev) => {
+        try {
+          const a = JSON.parse((ev as MessageEvent).data || '{}');
+          window.dispatchEvent(new CustomEvent('celebrate', {
+            detail: { type: 'milestone', message: `🏆 ${a.title}${a.description ? ' — ' + a.description : ''}` },
+          }));
+          window.dispatchEvent(new CustomEvent('achievement:refresh'));
+        } catch {}
+      });
       es.onerror = () => { es?.close(); };
     }
 
@@ -146,6 +156,7 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
       <SearchPalette />
       <CelebrationListener />
       <BrandingApplier />
+      <WelcomeTour />
     </div>
   );
 }

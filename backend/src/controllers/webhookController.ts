@@ -4,6 +4,7 @@ import prisma from '../services/prisma';
 import { notifyNewOrder, logActivity } from '../services/notifications';
 import { broadcastEvent } from '../services/eventBus';
 import { getNextManagerId } from '../services/roundRobin';
+import { checkAchievements } from '../services/achievements';
 import { AuthRequest } from '../middleware/auth';
 
 // Public webhook endpoint — token determines which org the order belongs to
@@ -128,6 +129,8 @@ export const receiveOrder = async (req: Request, res: Response) => {
     details: `Webhook order #${order.orderNum} from ${source}`,
     ip: req.ip,
   });
+
+  void checkAchievements(orgId);
 
   return res.status(201).json({
     success: true,

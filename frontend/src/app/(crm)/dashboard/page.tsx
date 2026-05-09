@@ -35,6 +35,11 @@ import { useAuthStore } from '@/stores/authStore';
 import PlanUsage from '@/components/PlanUsage';
 import Sparkline from '@/components/Sparkline';
 import SlaBadge from '@/components/SlaBadge';
+import AchievementsCard from '@/components/AchievementsCard';
+import dynamic from 'next/dynamic';
+
+// Leaflet is browser-only — dynamically loaded with no SSR
+const CustomersMap = dynamic(() => import('@/components/CustomersMap'), { ssr: false });
 
 interface DayData {
   date: string;
@@ -341,6 +346,12 @@ export default function DashboardPage() {
 
       {/* Plan usage */}
       <PlanUsage />
+
+      {/* Achievements */}
+      <AchievementsCard />
+
+      {/* Customers map */}
+      <CustomersMap />
 
       {/* Recent orders */}
       <div className="card">

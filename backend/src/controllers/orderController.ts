@@ -5,44 +5,7 @@ import { notifyNewOrder, logActivity } from '../services/notifications';
 import { broadcastEvent } from '../services/eventBus';
 import { sendIncomeToRashod } from '../services/rashodWebhook';
 import { getNextManagerId } from '../services/roundRobin';
-
-// Milestones already announced (in-memory; resets on restart — acceptable noise)
-const announcedMilestones = new Set<string>();
-
-async function checkMilestones(orgId: string) {
-  try {
-    const [delivered, revenue] = await Promise.all([
-      prisma.order.count({ where: { organizationId: orgId, status: 'DELIVERED' } }),
-      prisma.order.aggregate({
-        where: { organizationId: orgId, status: 'DELIVERED' },
-        _sum: { total: true },
-      }),
-    ]);
-
-    const totalRevenue = revenue._sum.total ?? 0;
-
-    const candidates: Array<{ key: string; message: string }> = [];
-    // Order-count milestones
-    [1, 10, 100, 500, 1000, 5000].forEach((n) => {
-      if (delivered === n) candidates.push({ key: `${orgId}:delivered:${n}`, message: `🎉 ${n} доставлених замовлень!` });
-    });
-    // Revenue milestones (in UAH)
-    [10_000, 50_000, 100_000, 500_000, 1_000_000].forEach((n) => {
-      if (totalRevenue >= n && totalRevenue - 1 < n + 100_000) {
-        const key = `${orgId}:revenue:${n}`;
-        if (!announcedMilestones.has(key)) candidates.push({ key, message: `🎉 Виручка перевищила ${n.toLocaleString('uk-UA')} ₴!` });
-      }
-    });
-
-    for (const c of candidates) {
-      if (announcedMilestones.has(c.key)) continue;
-      announcedMilestones.add(c.key);
-      broadcastEvent(orgId, 'milestone', { message: c.message });
-    }
-  } catch {
-    /* non-fatal */
-  }
-}
+import { checkAchievements } from '../services/achievements';
 
 const ORDER_SELECT = {
   id: true,
@@ -279,6 +242,8 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     ip: req.ip,
   });
 
+  void checkAchievements(orgId);
+
   return res.status(201).json(order);
 };
 
@@ -380,8 +345,7 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
       deliveredAt: new Date(),
     }).catch(() => {});
     broadcastEvent(orgId, 'order_delivered', { orderNum: order.orderNum, total: order.total });
-    // Milestone: every 100 delivered orders, 10K/100K revenue
-    void checkMilestones(orgId);
+    void checkAchievements(orgId);
   }
 
   await logActivity({

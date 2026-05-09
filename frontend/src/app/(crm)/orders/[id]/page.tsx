@@ -31,6 +31,7 @@ import {
   Loader2,
   Save,
   X,
+  FileText,
 } from 'lucide-react';
 
 const DELIVERY_SERVICES = [
@@ -601,17 +602,53 @@ export default function OrderDetailPage() {
                 )}
                 {/* TTN */}
                 {order.trackingNumber ? (
-                  <div className="flex items-center justify-between border-t border-gray-100 dark:border-gray-800 pt-2 mt-1">
-                    <span className="text-gray-500">ТТН</span>
-                    <a
-                      href={`https://novaposhta.ua/tracking/?cargo_number=${order.trackingNumber}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-1 font-mono text-sm font-semibold text-primary-600 hover:underline"
-                    >
-                      {order.trackingNumber}
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
+                  <div className="space-y-2 border-t border-gray-100 dark:border-gray-800 pt-2 mt-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-500">ТТН</span>
+                      <a
+                        href={`https://novaposhta.ua/tracking/?cargo_number=${order.trackingNumber}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 font-mono text-sm font-semibold text-primary-600 hover:underline"
+                      >
+                        {order.trackingNumber}
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                    {canEdit && (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={async () => {
+                            try {
+                              const res = await api.get('/nova-poshta/print-ttn', { params: { orderId: order.id, format: 'pdf', size: '100x100' } });
+                              window.open(res.data.url, '_blank');
+                            } catch (err: unknown) {
+                              const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+                              toast.error(msg);
+                            }
+                          }}
+                          className="flex-1 flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-950/20 transition-colors"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          Маркування PDF
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const res = await api.get('/nova-poshta/print-ttn', { params: { orderId: order.id, format: 'pdf', size: 'A4' } });
+                              window.open(res.data.url, '_blank');
+                            } catch (err: unknown) {
+                              const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+                              toast.error(msg);
+                            }
+                          }}
+                          className="flex-1 flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 hover:border-primary-400 hover:bg-primary-50 dark:hover:bg-primary-950/20 transition-colors"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          Накладна A4
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   order.deliveryService === 'NOVA_POSHTA' && canEdit && (

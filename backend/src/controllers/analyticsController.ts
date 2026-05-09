@@ -745,6 +745,39 @@ export const deleteCcPayment = async (req: AuthRequest, res: Response) => {
   return res.json({ message: 'Payment deleted' });
 };
 
+// GET /api/analytics/customers-by-city — aggregate orders+revenue by city
+export const getCustomersByCity = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const { dateFrom, dateTo } = req.query as Record<string, string>;
+  const dateFilter = dateRange(dateFrom, dateTo);
+  const orderFilter = {
+    organizationId: orgId,
+    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+  };
+
+  const orders = await prisma.order.findMany({
+    where: { ...orderFilter, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+    select: {
+      total: true,
+      customer: { select: { city: true } },
+    },
+  });
+
+  const map = new Map<string, { city: string; orders: number; revenue: number }>();
+  for (const o of orders) {
+    const c = (o.customer.city || '').trim();
+    if (!c) continue;
+    const key = c.toLowerCase();
+    const cur = map.get(key) || { city: c, orders: 0, revenue: 0 };
+    cur.orders++;
+    cur.revenue += o.total;
+    map.set(key, cur);
+  }
+
+  const data = Array.from(map.values()).sort((a, b) => b.orders - a.orders);
+  return res.json(data);
+};
+
 export const getKpi = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const now = new Date();

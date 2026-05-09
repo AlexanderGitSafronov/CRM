@@ -10,6 +10,7 @@ import {
   getCancelReasons,
   getCustomerLtv,
   getKpi,
+  getCustomersByCity,
   getCcStats,
   getExpenses,
   createExpense,
@@ -33,6 +34,7 @@ router.get('/redemption-rate', getRedemptionRate);
 router.get('/cancel-reasons', getCancelReasons);
 router.get('/customer-ltv', getCustomerLtv);
 router.get('/kpi', getKpi);
+router.get('/customers-by-city', getCustomersByCity);
 router.get('/cc-stats', getCcStats);
 router.get('/expenses', getExpenses);
 router.post('/expenses', requireRole('ADMIN', 'MANAGER'), createExpense);
