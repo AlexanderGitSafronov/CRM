@@ -1,17 +1,16 @@
 import { Router, Response } from 'express';
 import prisma from '../services/prisma';
-import { authenticate, requireRole } from '../middleware/auth';
-import { AuthRequest } from '../middleware/auth';
-import { createNotification, logActivity } from '../services/notifications';
+import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
+import { logActivity } from '../services/notifications';
 
 const router = Router();
 router.use(authenticate);
 
-// GET /api/callbacks — list (optionally filter: ?done=false, ?mine=true)
 router.get('/', async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { done, mine, orderId } = req.query as Record<string, string>;
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = { organizationId: orgId };
   if (done !== undefined) where.done = done === 'true';
   if (mine === 'true') where.managerId = req.user!.id;
   if (orderId) where.orderId = orderId;
@@ -28,16 +27,16 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   return res.json(callbacks);
 });
 
-// POST /api/callbacks — create callback reminder
 router.post('/', requireRole('ADMIN', 'MANAGER', 'CALL_CENTER'), async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { orderId, scheduledAt, note, managerId } = req.body;
 
   if (!orderId || !scheduledAt) {
     return res.status(400).json({ error: 'orderId and scheduledAt required' });
   }
 
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
+  const order = await prisma.order.findFirst({
+    where: { id: orderId, organizationId: orgId },
     select: { orderNum: true, managerId: true },
   });
 
@@ -47,6 +46,7 @@ router.post('/', requireRole('ADMIN', 'MANAGER', 'CALL_CENTER'), async (req: Aut
 
   const callback = await prisma.callback.create({
     data: {
+      organizationId: orgId,
       orderId,
       managerId: assignedManagerId || null,
       scheduledAt: new Date(scheduledAt),
@@ -59,6 +59,7 @@ router.post('/', requireRole('ADMIN', 'MANAGER', 'CALL_CENTER'), async (req: Aut
   });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'CALLBACK_CREATED',
     entityType: 'Order',
@@ -70,9 +71,9 @@ router.post('/', requireRole('ADMIN', 'MANAGER', 'CALL_CENTER'), async (req: Aut
   return res.status(201).json(callback);
 });
 
-// PATCH /api/callbacks/:id/done — mark as done
 router.patch('/:id/done', requireRole('ADMIN', 'MANAGER', 'CALL_CENTER'), async (req: AuthRequest, res: Response) => {
-  const cb = await prisma.callback.findUnique({ where: { id: req.params.id } });
+  const orgId = req.user!.organizationId;
+  const cb = await prisma.callback.findFirst({ where: { id: req.params.id, organizationId: orgId } });
   if (!cb) return res.status(404).json({ error: 'Не найдено' });
 
   const updated = await prisma.callback.update({
@@ -86,8 +87,10 @@ router.patch('/:id/done', requireRole('ADMIN', 'MANAGER', 'CALL_CENTER'), async 
   return res.json(updated);
 });
 
-// DELETE /api/callbacks/:id
 router.delete('/:id', requireRole('ADMIN', 'MANAGER', 'CALL_CENTER'), async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const existing = await prisma.callback.findFirst({ where: { id: req.params.id, organizationId: orgId }, select: { id: true } });
+  if (!existing) return res.status(404).json({ error: 'Не найдено' });
   await prisma.callback.delete({ where: { id: req.params.id } });
   return res.json({ success: true });
 });

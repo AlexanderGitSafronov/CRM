@@ -18,14 +18,10 @@ export async function runCallbackCheck(): Promise<{ reminded: number; errors: nu
 
   try {
     const now = new Date();
-    const windowEnd = new Date(now.getTime() + 5 * 60 * 1000); // next 5 minutes
+    const windowEnd = new Date(now.getTime() + 5 * 60 * 1000);
 
-    // Find callbacks due within next 5 minutes that haven't been notified yet
     const due = await prisma.callback.findMany({
-      where: {
-        done: false,
-        scheduledAt: { gte: now, lte: windowEnd },
-      },
+      where: { done: false, scheduledAt: { gte: now, lte: windowEnd } },
       include: {
         order: { select: { orderNum: true, customer: { select: { name: true, phone: true } } } },
         manager: { select: { id: true, name: true } },
@@ -38,15 +34,16 @@ export async function runCallbackCheck(): Promise<{ reminded: number; errors: nu
         const msg = `${cb.order.customer.name} · ${cb.order.customer.phone}${cb.note ? `\n${cb.note}` : ''}`;
 
         await createNotification({
+          organizationId: cb.organizationId,
           userId: cb.managerId ?? undefined,
           type: 'REMINDER',
-          title,
-          message: msg,
+          title, message: msg,
           entityId: cb.orderId,
         });
 
-        // Telegram notification
-        const tgIntegration = await prisma.integration.findUnique({ where: { type: 'TELEGRAM' } });
+        const tgIntegration = await prisma.integration.findUnique({
+          where: { organizationId_type: { organizationId: cb.organizationId, type: 'TELEGRAM' } },
+        });
         if (tgIntegration?.active) {
           const cfg = JSON.parse(tgIntegration.config) as { botToken: string; chatId: string };
           if (cfg.botToken && cfg.chatId) {
@@ -59,7 +56,6 @@ export async function runCallbackCheck(): Promise<{ reminded: number; errors: nu
         }
 
         result.reminded++;
-        logger.info(`Callback reminder sent for order #${cb.order.orderNum}`);
       } catch (err) {
         result.errors++;
         logger.error(`Callback reminder error for ${cb.id}:`, err);
@@ -79,7 +75,6 @@ export async function runCallbackCheck(): Promise<{ reminded: number; errors: nu
 
 let cronJob: ReturnType<typeof cron.schedule> | null = null;
 
-// Check every 5 minutes
 export function startCallbackReminder() {
   if (cronJob) return;
   cronJob = cron.schedule('*/5 * * * *', () => runCallbackCheck().catch((e) => logger.error('Callback cron error:', e)));

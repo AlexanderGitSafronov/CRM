@@ -4,9 +4,10 @@ import { AuthRequest } from '../middleware/auth';
 import { logActivity } from '../services/notifications';
 
 export const getProducts = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { search, active, page = '1', limit = '50' } = req.query as Record<string, string>;
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = { organizationId: orgId };
   if (search) {
     where.OR = [
       { name: { contains: search, mode: 'insensitive' } },
@@ -46,9 +47,10 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
 };
 
 export const getProduct = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
-  const product = await prisma.product.findUnique({
-    where: { id },
+  const product = await prisma.product.findFirst({
+    where: { id, organizationId: orgId },
     include: { _count: { select: { orderItems: true } } },
   });
 
@@ -69,14 +71,25 @@ export const getProduct = async (req: AuthRequest, res: Response) => {
 };
 
 export const createProduct = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { name, sku, description, purchasePrice, salePrice, stock, image } = req.body;
 
   if (!name?.trim()) {
     return res.status(400).json({ error: 'Product name required' });
   }
 
+  // Plan limit check
+  const [org, productCount] = await Promise.all([
+    prisma.organization.findUnique({ where: { id: orgId }, select: { maxProducts: true } }),
+    prisma.product.count({ where: { organizationId: orgId } }),
+  ]);
+  if (org && productCount >= org.maxProducts) {
+    return res.status(402).json({ error: `Ліміт тарифу: максимум ${org.maxProducts} товарів. Оновіть план.` });
+  }
+
   const product = await prisma.product.create({
     data: {
+      organizationId: orgId,
       name: name.trim(),
       sku: sku?.trim() || null,
       description: description?.trim() || null,
@@ -88,6 +101,7 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
   });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'PRODUCT_CREATED',
     entityType: 'Product',
@@ -100,8 +114,12 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
 };
 
 export const updateProduct = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
   const { name, sku, description, purchasePrice, salePrice, stock, image, active } = req.body;
+
+  const existing = await prisma.product.findFirst({ where: { id, organizationId: orgId }, select: { id: true } });
+  if (!existing) return res.status(404).json({ error: 'Товар не найден' });
 
   const product = await prisma.product.update({
     where: { id },
@@ -118,6 +136,7 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
   });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'PRODUCT_UPDATED',
     entityType: 'Product',
@@ -129,11 +148,14 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
 };
 
 export const deleteProduct = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
+
+  const existing = await prisma.product.findFirst({ where: { id, organizationId: orgId }, select: { id: true } });
+  if (!existing) return res.status(404).json({ error: 'Товар не найден' });
 
   const inUse = await prisma.orderItem.count({ where: { productId: id } });
   if (inUse > 0) {
-    // Soft delete
     await prisma.product.update({ where: { id }, data: { active: false } });
     return res.json({ message: 'Product deactivated (has orders)' });
   }
@@ -141,6 +163,7 @@ export const deleteProduct = async (req: AuthRequest, res: Response) => {
   await prisma.product.delete({ where: { id } });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'PRODUCT_DELETED',
     entityType: 'Product',
@@ -152,8 +175,12 @@ export const deleteProduct = async (req: AuthRequest, res: Response) => {
 };
 
 export const updateStock = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
   const { stock, delta } = req.body;
+
+  const existing = await prisma.product.findFirst({ where: { id, organizationId: orgId }, select: { id: true } });
+  if (!existing) return res.status(404).json({ error: 'Товар не найден' });
 
   if (stock !== undefined) {
     const product = await prisma.product.update({

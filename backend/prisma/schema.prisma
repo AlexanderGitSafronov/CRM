@@ -7,88 +7,148 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
+// ============================================
+// SaaS multi-tenancy: Organization is the tenant
+// ============================================
+model Organization {
   id        String   @id @default(cuid())
   name      String
-  email     String   @unique
-  password  String
-  role      String   @default("MANAGER") // ADMIN, MANAGER, VIEWER
-  avatar    String?
+  slug      String   @unique
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  orders       Order[]
-  activityLogs ActivityLog[]
-  notifications Notification[]
-  callbacks    Callback[]
-  ccPayments   CcPayment[]
+  // Plan & limits (denormalized from plan code for cheap reads)
+  plan         String   @default("FREE") // FREE, PRO, BUSINESS
+  maxUsers     Int      @default(3)
+  maxOrders    Int      @default(500)   // per calendar month
+  maxProducts  Int      @default(50)
 
+  // Stripe-ready subscription fields (null until paid)
+  stripeCustomerId     String?  @unique
+  stripeSubscriptionId String?  @unique
+  stripePriceId        String?
+  subscriptionStatus   String?  // active, trialing, past_due, canceled, unpaid
+  trialEndsAt          DateTime?
+  currentPeriodEnd     DateTime?
+
+  users           User[]
+  customers       Customer[]
+  products        Product[]
+  orders          Order[]
+  expenses        Expense[]
+  activityLogs    ActivityLog[]
+  notifications   Notification[]
+  integrations    Integration[]
+  webhookTokens   WebhookToken[]
+  callbacks       Callback[]
+  ccPayments      CcPayment[]
+  passwordResets  PasswordReset[]
+  emailVerifications EmailVerification[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  email          String   @unique
+  password       String
+  role           String   @default("MANAGER") // ADMIN, MANAGER, VIEWER, CALL_CENTER
+  avatar         String?
+  active         Boolean  @default(true)
+  emailVerified  Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orders        Order[]
+  activityLogs  ActivityLog[]
+  notifications Notification[]
+  callbacks     Callback[]
+  ccPayments    CcPayment[]
+
+  @@index([organizationId])
   @@map("users")
 }
 
 model Customer {
-  id             String   @id @default(cuid())
-  name           String
-  phone          String   @unique
-  email          String?
-  address        String?
-  city           String?
-  notes          String?
-  isBlacklisted  Boolean  @default(false)
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  phone           String
+  email           String?
+  address         String?
+  city            String?
+  notes           String?
+  isBlacklisted   Boolean  @default(false)
   blacklistReason String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  orders Order[]
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orders       Order[]
 
+  @@unique([organizationId, phone])
+  @@index([organizationId])
   @@map("customers")
 }
 
 model Product {
-  id            String   @id @default(cuid())
-  name          String
-  sku           String?  @unique
-  description   String?
-  purchasePrice Float    @default(0)
-  salePrice     Float    @default(0)
-  stock         Int      @default(0)
-  image         String?
-  active        Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  sku            String?
+  description    String?
+  purchasePrice  Float    @default(0)
+  salePrice      Float    @default(0)
+  stock          Int      @default(0)
+  image          String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  orderItems OrderItem[]
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orderItems   OrderItem[]
 
+  @@unique([organizationId, sku])
+  @@index([organizationId])
   @@map("products")
 }
 
 model Order {
-  id                String      @id @default(cuid())
-  orderNum          Int         @unique @default(0)
-  customerId        String
-  managerId         String?
-  status            String      @default("NEW")
-  source            String      @default("MANUAL")
-  comment           String?
-  total             Float       @default(0)
-  deliveryService   String?     // NOVA_POSHTA, UKRPOSHTA, COURIER, PICKUP
-  deliveryCity      String?
-  deliveryAddress   String?
-  recipientName     String?
-  npCityRef         String?     // Nova Poshta city ref (for TTN creation)
-  npWarehouseRef    String?     // Nova Poshta warehouse ref (for TTN creation)
-  trackingNumber    String?     // Nova Poshta TTN
-  cancelReason      String?     // Reason for cancellation (call center)
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
+  id              String   @id @default(cuid())
+  organizationId  String
+  orderNum        Int      @default(0)
+  customerId      String
+  managerId       String?
+  status          String   @default("NEW")
+  source          String   @default("MANUAL")
+  comment         String?
+  total           Float    @default(0)
+  deliveryService String?
+  deliveryCity    String?
+  deliveryAddress String?
+  recipientName   String?
+  npCityRef       String?
+  npWarehouseRef  String?
+  trackingNumber  String?
+  cancelReason    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  customer   Customer    @relation(fields: [customerId], references: [id])
-  manager    User?       @relation(fields: [managerId], references: [id])
-  items      OrderItem[]
-  history    OrderHistory[]
-  callbacks  Callback[]
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer       @relation(fields: [customerId], references: [id])
+  manager      User?          @relation(fields: [managerId], references: [id])
+  items        OrderItem[]
+  history      OrderHistory[]
+  callbacks    Callback[]
 
+  @@unique([organizationId, orderNum])
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
   @@map("orders")
 }
 
@@ -121,92 +181,153 @@ model OrderHistory {
 }
 
 model Expense {
-  id          String   @id @default(cuid())
-  category    String   // ADVERTISING, SERVICES, PURCHASE, OTHER
-  amount      Float
-  description String?
-  date        DateTime @default(now())
-  createdAt   DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String
+  category       String
+  amount         Float
+  description    String?
+  date           DateTime @default(now())
+  createdAt      DateTime @default(now())
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([organizationId, date])
   @@map("expenses")
 }
 
 model ActivityLog {
-  id         String   @id @default(cuid())
-  userId     String?
-  action     String
-  entityType String?
-  entityId   String?
-  details    String?
-  ip         String?
-  createdAt  DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         String
+  entityType     String?
+  entityId       String?
+  details        String?
+  ip             String?
+  createdAt      DateTime @default(now())
 
-  user User? @relation(fields: [userId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id])
 
+  @@index([organizationId])
+  @@index([organizationId, createdAt])
   @@map("activity_logs")
 }
 
 model Notification {
-  id        String   @id @default(cuid())
-  userId    String?
-  type      String   // NEW_ORDER, STATUS_CHANGE, OVERDUE, REMINDER
-  title     String
-  message   String
-  read      Boolean  @default(false)
-  entityId  String?
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  type           String
+  title          String
+  message        String
+  read           Boolean  @default(false)
+  entityId       String?
+  createdAt      DateTime @default(now())
 
-  user User? @relation(fields: [userId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id])
 
+  @@index([organizationId])
+  @@index([userId, read])
   @@map("notifications")
 }
 
 model Integration {
-  id        String   @id @default(cuid())
-  type      String   @unique // TELEGRAM, FACEBOOK, SHOPIFY, WEBHOOK
-  name      String
-  config    String   @default("{}")
-  active    Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(cuid())
+  organizationId String
+  type           String
+  name           String
+  config         String   @default("{}")
+  active         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, type])
+  @@index([organizationId])
   @@map("integrations")
 }
 
 model WebhookToken {
-  id        String   @id @default(cuid())
-  name      String
-  token     String   @unique
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  token          String   @unique
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
   @@map("webhook_tokens")
 }
 
 model Callback {
-  id          String    @id @default(cuid())
-  orderId     String
-  managerId   String?
-  scheduledAt DateTime
-  note        String?
-  done        Boolean   @default(false)
-  doneAt      DateTime?
-  createdAt   DateTime  @default(now())
+  id             String    @id @default(cuid())
+  organizationId String
+  orderId        String
+  managerId      String?
+  scheduledAt    DateTime
+  note           String?
+  done           Boolean   @default(false)
+  doneAt         DateTime?
+  createdAt      DateTime  @default(now())
 
-  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  manager User? @relation(fields: [managerId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order        Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  manager      User?        @relation(fields: [managerId], references: [id])
 
+  @@index([organizationId])
   @@map("callbacks")
 }
 
 model CcPayment {
-  id          String   @id @default(cuid())
-  operatorId  String
-  amount      Float
-  note        String?
-  createdAt   DateTime @default(now())
+  id             String   @id @default(cuid())
+  organizationId String
+  operatorId     String
+  amount         Float
+  note           String?
+  createdAt      DateTime @default(now())
 
-  operator User @relation(fields: [operatorId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  operator     User         @relation(fields: [operatorId], references: [id])
 
+  @@index([organizationId])
   @@map("cc_payments")
+}
+
+// ============================================
+// Auth flows: email verification & password reset
+// ============================================
+model EmailVerification {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  token          String   @unique
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verifications")
+}
+
+model PasswordReset {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  token          String   @unique
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_resets")
 }

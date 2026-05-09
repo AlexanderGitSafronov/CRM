@@ -1,16 +1,16 @@
-import { Router, Request, Response } from 'express';
+import { Router, Response } from 'express';
 import prisma from '../services/prisma';
 import { sendTelegramMessage } from '../services/telegram';
 import { sendSmsToCustomer, type TurboSmsChannel } from '../services/turbosms';
-import { authenticate, requireRole } from '../middleware/auth';
+import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
 router.use(authenticate, requireRole('ADMIN'));
 
-router.get('/', async (req: Request, res: Response) => {
-  const integrations = await prisma.integration.findMany();
-  // Mask sensitive fields in config before returning
+router.get('/', async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const integrations = await prisma.integration.findMany({ where: { organizationId: orgId } });
   const masked = integrations.map((integration) => {
     try {
       const config = JSON.parse(integration.config) as Record<string, unknown>;
@@ -31,70 +31,47 @@ router.get('/', async (req: Request, res: Response) => {
   return res.json(masked);
 });
 
-router.put('/:type', async (req: Request, res: Response) => {
+router.put('/:type', async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { type } = req.params;
   const { config, active } = req.body;
 
   const integration = await prisma.integration.upsert({
-    where: { type },
-    update: {
-      config: JSON.stringify(config),
-      active: Boolean(active),
-    },
-    create: {
-      type,
-      name: type,
-      config: JSON.stringify(config),
-      active: Boolean(active),
-    },
+    where: { organizationId_type: { organizationId: orgId, type } },
+    update: { config: JSON.stringify(config), active: Boolean(active) },
+    create: { organizationId: orgId, type, name: type, config: JSON.stringify(config), active: Boolean(active) },
   });
 
   return res.json(integration);
 });
 
-router.post('/telegram/test', async (req: Request, res: Response) => {
+router.post('/telegram/test', async (req: AuthRequest, res: Response) => {
   const { botToken, chatId } = req.body;
-
   if (!botToken || !chatId) {
     return res.status(400).json({ error: 'botToken and chatId required' });
   }
-
   const success = await sendTelegramMessage({
-    botToken,
-    chatId,
+    botToken, chatId,
     message: '✅ <b>Тестовое сообщение</b>\n\nCRM подключена успешно!',
   });
-
-  if (success) {
-    return res.json({ success: true, message: 'Test message sent' });
-  } else {
-    return res.status(400).json({ success: false, error: 'Failed to send message. Check token and chat ID.' });
-  }
+  if (success) return res.json({ success: true, message: 'Test message sent' });
+  return res.status(400).json({ success: false, error: 'Failed to send message. Check token and chat ID.' });
 });
 
-router.post('/turbosms/test', async (req: Request, res: Response) => {
+router.post('/turbosms/test', async (req: AuthRequest, res: Response) => {
   const { token, senderName, channel, phone } = req.body as {
-    token: string;
-    senderName: string;
-    channel: TurboSmsChannel;
-    phone: string;
+    token: string; senderName: string; channel: TurboSmsChannel; phone: string;
   };
-
   if (!token || !senderName || !phone) {
     return res.status(400).json({ error: 'token, senderName, phone required' });
   }
-
   const ok = await sendSmsToCustomer(
     phone,
     `✅ Тестове повідомлення від CRM. Канал: ${channel ?? 'viber_sms'}`,
     { token, senderName, channel: channel ?? 'viber_sms' },
   );
-
-  if (ok) {
-    return res.json({ success: true, message: 'Повідомлення надіслано' });
-  } else {
-    return res.status(400).json({ success: false, error: 'Не вдалось надіслати. Перевірте токен та ім\'я відправника.' });
-  }
+  if (ok) return res.json({ success: true, message: 'Повідомлення надіслано' });
+  return res.status(400).json({ success: false, error: 'Не вдалось надіслати. Перевірте токен та ім\'я відправника.' });
 });
 
 export default router;

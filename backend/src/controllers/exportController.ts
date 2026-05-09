@@ -4,9 +4,10 @@ import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 
 export const exportOrders = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { status, dateFrom, dateTo, format = 'csv' } = req.query as Record<string, string>;
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = { organizationId: orgId };
   if (status && status !== 'ALL') where.status = status;
   if (dateFrom || dateTo) {
     where.createdAt = {};
@@ -30,23 +31,12 @@ export const exportOrders = async (req: AuthRequest, res: Response) => {
   });
 
   const STATUS_LABELS: Record<string, string> = {
-    NEW: 'Новый',
-    PROCESSING: 'В обработке',
-    CONFIRMED: 'Подтверждён',
-    SHIPPED: 'Отправлен',
-    DELIVERED: 'Доставлен',
-    CANCELLED: 'Отказ',
-    RETURNED: 'Возврат',
+    NEW: 'Новый', PROCESSING: 'В обработке', CONFIRMED: 'Подтверждён',
+    SHIPPED: 'Отправлен', DELIVERED: 'Доставлен', CANCELLED: 'Отказ', RETURNED: 'Возврат',
   };
-
   const SOURCE_LABELS: Record<string, string> = {
-    WEBSITE: 'Сайт',
-    LANDING: 'Лендинг',
-    FACEBOOK: 'Facebook',
-    INSTAGRAM: 'Instagram',
-    MANUAL: 'Менеджер',
-    TELEGRAM: 'Telegram',
-    WEBHOOK: 'Webhook',
+    WEBSITE: 'Сайт', LANDING: 'Лендинг', FACEBOOK: 'Facebook', INSTAGRAM: 'Instagram',
+    MANUAL: 'Менеджер', TELEGRAM: 'Telegram', WEBHOOK: 'Webhook',
   };
 
   const rows = orders.map((o) => ({
@@ -67,26 +57,18 @@ export const exportOrders = async (req: AuthRequest, res: Response) => {
 
   if (format === 'json') {
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="orders_${new Date().toISOString().split('T')[0]}.json"`
-    );
+    res.setHeader('Content-Disposition', `attachment; filename="orders_${new Date().toISOString().split('T')[0]}.json"`);
     return res.json(rows);
   }
 
   const csv = stringify(rows, { header: true, delimiter: ';' });
-
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader(
-    'Content-Disposition',
-    `attachment; filename="orders_${new Date().toISOString().split('T')[0]}.csv"`
-  );
-  // Add BOM for Excel
-  return res.send('\uFEFF' + csv);
+  res.setHeader('Content-Disposition', `attachment; filename="orders_${new Date().toISOString().split('T')[0]}.csv"`);
+  return res.send('﻿' + csv);
 };
 
-// GET /api/export/finances — CSV export of expenses + delivered revenue
 export const exportFinances = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { dateFrom, dateTo } = req.query as Record<string, string>;
 
   const dateFilter: Record<string, Date> = {};
@@ -96,16 +78,19 @@ export const exportFinances = async (req: AuthRequest, res: Response) => {
     end.setHours(23, 59, 59, 999);
     dateFilter.lte = end;
   }
-  const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
-  const dateRangeFilter = Object.keys(dateFilter).length ? { date: dateFilter } : {};
+  const orderWhere = {
+    organizationId: orgId,
+    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+  };
+  const expenseWhere = {
+    organizationId: orgId,
+    ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
+  };
 
   const [expenses, deliveredOrders] = await Promise.all([
-    prisma.expense.findMany({
-      where: dateRangeFilter,
-      orderBy: { date: 'desc' },
-    }),
+    prisma.expense.findMany({ where: expenseWhere, orderBy: { date: 'desc' } }),
     prisma.order.findMany({
-      where: { ...createdAtFilter, status: 'DELIVERED' },
+      where: { ...orderWhere, status: 'DELIVERED' },
       select: { orderNum: true, total: true, createdAt: true, source: true, customer: { select: { name: true } } },
       orderBy: { createdAt: 'desc' },
     }),
@@ -144,13 +129,14 @@ export const exportFinances = async (req: AuthRequest, res: Response) => {
   const csv = stringify(allRows, { header: true, delimiter: ';' });
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="finances_${new Date().toISOString().split('T')[0]}.csv"`);
-  return res.send('\uFEFF' + csv);
+  return res.send('﻿' + csv);
 };
 
 export const getActivityLogs = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { userId, action, entityType, page = '1', limit = '50' } = req.query as Record<string, string>;
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = { organizationId: orgId };
   if (userId) where.userId = userId;
   if (action) where.action = { contains: action };
   if (entityType) where.entityType = entityType;

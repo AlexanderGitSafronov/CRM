@@ -4,9 +4,10 @@ import { AuthRequest } from '../middleware/auth';
 import { logActivity } from '../services/notifications';
 
 export const getCustomers = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { search, page = '1', limit = '20' } = req.query as Record<string, string>;
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = { organizationId: orgId };
   if (search) {
     where.OR = [
       { name: { contains: search, mode: 'insensitive' } },
@@ -56,10 +57,11 @@ export const getCustomers = async (req: AuthRequest, res: Response) => {
 };
 
 export const getCustomer = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
 
-  const customer = await prisma.customer.findUnique({
-    where: { id },
+  const customer = await prisma.customer.findFirst({
+    where: { id, organizationId: orgId },
     include: {
       orders: {
         include: {
@@ -81,8 +83,12 @@ export const getCustomer = async (req: AuthRequest, res: Response) => {
 };
 
 export const updateCustomer = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
   const { name, email, city, address, notes } = req.body;
+
+  const existing = await prisma.customer.findFirst({ where: { id, organizationId: orgId }, select: { id: true } });
+  if (!existing) return res.status(404).json({ error: 'Клиент не найден' });
 
   const customer = await prisma.customer.update({
     where: { id },
@@ -99,10 +105,11 @@ export const updateCustomer = async (req: AuthRequest, res: Response) => {
 };
 
 export const toggleBlacklist = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
   const { isBlacklisted, blacklistReason } = req.body;
 
-  const customer = await prisma.customer.findUnique({ where: { id } });
+  const customer = await prisma.customer.findFirst({ where: { id, organizationId: orgId } });
   if (!customer) {
     return res.status(404).json({ error: 'Клиент не найден' });
   }
@@ -116,6 +123,7 @@ export const toggleBlacklist = async (req: AuthRequest, res: Response) => {
   });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: isBlacklisted ? 'CUSTOMER_BLACKLISTED' : 'CUSTOMER_UNBLACKLISTED',
     entityType: 'Customer',
@@ -128,9 +136,13 @@ export const toggleBlacklist = async (req: AuthRequest, res: Response) => {
 };
 
 export const deleteCustomer = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
 
-  const ordersCount = await prisma.order.count({ where: { customerId: id } });
+  const existing = await prisma.customer.findFirst({ where: { id, organizationId: orgId }, select: { id: true } });
+  if (!existing) return res.status(404).json({ error: 'Клиент не найден' });
+
+  const ordersCount = await prisma.order.count({ where: { customerId: id, organizationId: orgId } });
   if (ordersCount > 0) {
     return res.status(400).json({
       error: `Невозможно удалить клиента — у него ${ordersCount} заказов`,

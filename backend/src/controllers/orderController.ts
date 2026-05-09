@@ -37,6 +37,7 @@ const ORDER_SELECT = {
 };
 
 export const getOrders = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const {
     status,
     managerId,
@@ -50,7 +51,7 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
     sortOrder = 'desc',
   } = req.query as Record<string, string>;
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = { organizationId: orgId };
 
   if (status && status !== 'ALL') {
     where.status = status;
@@ -109,10 +110,11 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
 };
 
 export const getOrder = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
 
-  const order = await prisma.order.findUnique({
-    where: { id },
+  const order = await prisma.order.findFirst({
+    where: { id, organizationId: orgId },
     select: {
       ...ORDER_SELECT,
       history: {
@@ -131,6 +133,7 @@ export const getOrder = async (req: AuthRequest, res: Response) => {
 };
 
 export const createOrder = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { customer, items, source = 'MANUAL', comment, managerId } = req.body;
 
   if (!customer?.name || !customer?.phone) {
@@ -141,14 +144,15 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     return res.status(400).json({ error: 'At least one item required' });
   }
 
-  // Find or create customer
+  // Find or create customer (scoped by org)
   let dbCustomer = await prisma.customer.findUnique({
-    where: { phone: customer.phone.trim() },
+    where: { organizationId_phone: { organizationId: orgId, phone: customer.phone.trim() } },
   });
 
   if (!dbCustomer) {
     dbCustomer = await prisma.customer.create({
       data: {
+        organizationId: orgId,
         name: customer.name.trim(),
         phone: customer.phone.trim(),
         email: customer.email?.trim() || null,
@@ -162,26 +166,29 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     ? `⚠️ ЧОРНИЙ СПИСОК: ${dbCustomer.blacklistReason || 'без причини'}`
     : null;
 
-  // Generate orderNum
-  const lastOrder = await prisma.order.findFirst({ orderBy: { orderNum: 'desc' }, select: { orderNum: true } });
+  // Generate orderNum scoped to this org
+  const lastOrder = await prisma.order.findFirst({
+    where: { organizationId: orgId },
+    orderBy: { orderNum: 'desc' },
+    select: { orderNum: true },
+  });
   const orderNum = (lastOrder?.orderNum ?? 0) + 1;
 
-  // Calculate total
   const total = items.reduce(
     (sum: number, item: { price: number; quantity: number }) =>
       sum + item.price * item.quantity,
     0
   );
 
-  // If no managerId provided and requester is not a manager, use round-robin
   const assignedManagerId =
     managerId ||
     (req.user?.role !== 'VIEWER' ? req.user?.id : null) ||
-    (await getNextManagerId()) ||
+    (await getNextManagerId(orgId)) ||
     null;
 
   const order = await prisma.order.create({
     data: {
+      organizationId: orgId,
       orderNum,
       customerId: dbCustomer.id,
       managerId: assignedManagerId || null,
@@ -212,10 +219,10 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     select: { ...ORDER_SELECT, history: true },
   });
 
-  broadcastEvent('new_order', { orderNum: order.orderNum, source: order.source });
+  broadcastEvent(orgId, 'new_order', { orderNum: order.orderNum, source: order.source });
 
-  // Notifications
   await notifyNewOrder({
+    organizationId: orgId,
     id: order.id,
     orderNum: order.orderNum,
     customer: order.customer,
@@ -225,6 +232,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
   });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'ORDER_CREATED',
     entityType: 'Order',
@@ -237,11 +245,12 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
 };
 
 export const updateOrder = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
   const { status, managerId, comment, items } = req.body;
 
-  const existing = await prisma.order.findUnique({
-    where: { id },
+  const existing = await prisma.order.findFirst({
+    where: { id, organizationId: orgId },
     select: { status: true, managerId: true, orderNum: true },
   });
 
@@ -285,7 +294,6 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     updateData.comment = comment?.trim() || null;
   }
 
-  // Update items if provided — calculate total first, delete+create inside transaction
   if (items?.length) {
     const total = items.reduce(
       (sum: number, item: { price: number; quantity: number }) =>
@@ -308,14 +316,12 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     };
   }
 
-  // Create history entries
   if (historyEntries.length > 0) {
     await prisma.orderHistory.createMany({
       data: historyEntries.map((h) => ({ orderId: id, ...h })),
     });
   }
 
-  // Wrap delete+update in transaction to avoid partial state if update fails
   const order = await prisma.$transaction(async (tx) => {
     if (items?.length) {
       await tx.orderItem.deleteMany({ where: { orderId: id } });
@@ -327,7 +333,6 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     });
   });
 
-  // If status changed to DELIVERED — send income to rashod
   if (status === 'DELIVERED') {
     sendIncomeToRashod({
       orderId: id,
@@ -335,10 +340,11 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
       total: order.total,
       source: order.source,
       deliveredAt: new Date(),
-    }).catch(() => {}); // fire-and-forget, never block response
+    }).catch(() => {});
   }
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'ORDER_UPDATED',
     entityType: 'Order',
@@ -350,8 +356,8 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
   return res.json(order);
 };
 
-// Call center specific update: delivery info, CC statuses, upsell
 export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
   const {
     status,
@@ -366,8 +372,8 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
     cancelReason,
   } = req.body;
 
-  const existing = await prisma.order.findUnique({
-    where: { id },
+  const existing = await prisma.order.findFirst({
+    where: { id, organizationId: orgId },
     select: { status: true, orderNum: true, total: true },
   });
 
@@ -407,7 +413,6 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
   if (comment !== undefined) updateData.comment = comment?.trim() || null;
   if (cancelReason !== undefined) updateData.cancelReason = cancelReason?.trim() || null;
 
-  // Upsell: create extra order item and update total
   if (upsellAmount && Number(upsellAmount) > 0) {
     const amount = Number(upsellAmount);
     await prisma.orderItem.create({
@@ -439,6 +444,7 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
   });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'CC_ORDER_UPDATED',
     entityType: 'Order',
@@ -451,9 +457,10 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
 };
 
 export const deleteOrder = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
 
-  const existing = await prisma.order.findUnique({ where: { id } });
+  const existing = await prisma.order.findFirst({ where: { id, organizationId: orgId } });
   if (!existing) {
     return res.status(404).json({ error: 'Заказ не найден' });
   }
@@ -461,6 +468,7 @@ export const deleteOrder = async (req: AuthRequest, res: Response) => {
   await prisma.order.delete({ where: { id } });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'ORDER_DELETED',
     entityType: 'Order',
@@ -473,6 +481,7 @@ export const deleteOrder = async (req: AuthRequest, res: Response) => {
 };
 
 export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { ids, status } = req.body;
 
   if (!ids?.length || !status) {
@@ -485,16 +494,15 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
   }
 
   const orders = await prisma.order.findMany({
-    where: { id: { in: ids } },
+    where: { id: { in: ids }, organizationId: orgId },
     select: { id: true, status: true },
   });
 
   await prisma.order.updateMany({
-    where: { id: { in: ids } },
+    where: { id: { in: orders.map((o) => o.id) }, organizationId: orgId },
     data: { status },
   });
 
-  // Create history for each
   await prisma.orderHistory.createMany({
     data: orders.map((o) => ({
       orderId: o.id,
@@ -506,18 +514,27 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
   });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'BULK_STATUS_UPDATE',
     entityType: 'Order',
-    details: `Updated ${ids.length} orders to ${status}`,
+    details: `Updated ${orders.length} orders to ${status}`,
     ip: req.ip,
   });
 
-  return res.json({ updated: ids.length });
+  return res.json({ updated: orders.length });
 };
 
 export const getOrderHistory = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
+
+  // Verify the order belongs to caller's org
+  const order = await prisma.order.findFirst({
+    where: { id, organizationId: orgId },
+    select: { id: true },
+  });
+  if (!order) return res.status(404).json({ error: 'Заказ не найден' });
 
   const history = await prisma.orderHistory.findMany({
     where: { orderId: id },

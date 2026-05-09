@@ -14,14 +14,8 @@ export interface TurboSmsConfig {
 interface TurboSmsResponse {
   response_code: number;
   response_status: string;
-  response_result?: Array<{
-    recipient: string;
-    sms?: { status: string };
-    viber?: { status: string };
-  }>;
 }
 
-// Normalize phone to 380XXXXXXXXX format (Ukrainian)
 function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, '');
   if (digits.startsWith('380')) return digits;
@@ -40,51 +34,40 @@ export async function sendSmsToCustomer(
 
   const msgPayload = { sender: config.senderName, text };
 
-  if (config.channel === 'sms') {
-    body.sms = msgPayload;
-  } else if (config.channel === 'viber') {
-    body.viber = msgPayload;
-  } else {
-    // viber_sms: try Viber first, fallback to SMS
-    body.viber = msgPayload;
-    body.sms = msgPayload;
-  }
+  if (config.channel === 'sms') body.sms = msgPayload;
+  else if (config.channel === 'viber') body.viber = msgPayload;
+  else { body.viber = msgPayload; body.sms = msgPayload; }
 
   try {
     const response = await fetch(TURBOSMS_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.token}`,
-      },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.token}` },
       body: JSON.stringify(body),
     });
-
     const data = (await response.json()) as TurboSmsResponse;
-
     if (data.response_code === 0) {
       logger.info(`TurboSMS: sent to ${recipient} via ${config.channel}`);
       return true;
-    } else {
-      logger.warn(`TurboSMS: failed — code ${data.response_code}, status: ${data.response_status}`);
-      return false;
     }
+    logger.warn(`TurboSMS: failed — code ${data.response_code}, status: ${data.response_status}`);
+    return false;
   } catch (err) {
     logger.error('TurboSMS send error:', err);
     return false;
   }
 }
 
+// Per-org TurboSMS config
 export async function getTurboSmsConfig(prisma: {
   integration: {
-    findUnique: (args: { where: { type: string } }) => Promise<{
+    findUnique: (args: { where: { organizationId_type: { organizationId: string; type: string } } }) => Promise<{
       active: boolean;
       config: string;
     } | null>;
   };
-}): Promise<TurboSmsConfig | null> {
+}, organizationId: string): Promise<TurboSmsConfig | null> {
   const integration = await prisma.integration.findUnique({
-    where: { type: 'TURBOSMS' },
+    where: { organizationId_type: { organizationId, type: 'TURBOSMS' } },
   });
 
   if (!integration?.active) return null;

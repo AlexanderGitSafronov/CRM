@@ -20,6 +20,16 @@ export type OrderSource =
   | 'TELEGRAM'
   | 'WEBHOOK';
 
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  plan: 'FREE' | 'PRO' | 'BUSINESS';
+  maxUsers?: number;
+  maxOrders?: number;
+  maxProducts?: number;
+}
+
 export interface User {
   id: string;
   name: string;
@@ -28,6 +38,8 @@ export interface User {
   avatar?: string;
   active?: boolean;
   createdAt?: string;
+  emailVerified?: boolean;
+  organization?: Organization;
 }
 
 export interface Customer {

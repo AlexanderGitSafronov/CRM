@@ -3,18 +3,23 @@ import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { logActivity } from '../services/notifications';
 
-export const getSummary = async (req: AuthRequest, res: Response) => {
-  const { dateFrom, dateTo } = req.query as Record<string, string>;
-
-  const dateFilter: Record<string, Date> = {};
-  if (dateFrom) dateFilter.gte = new Date(dateFrom);
+const dateRange = (dateFrom?: string, dateTo?: string) => {
+  const f: Record<string, Date> = {};
+  if (dateFrom) f.gte = new Date(dateFrom);
   if (dateTo) {
     const end = new Date(dateTo);
     end.setHours(23, 59, 59, 999);
-    dateFilter.lte = end;
+    f.lte = end;
   }
+  return f;
+};
 
+export const getSummary = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const { dateFrom, dateTo } = req.query as Record<string, string>;
+  const dateFilter = dateRange(dateFrom, dateTo);
   const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
+  const orgFilter = { organizationId: orgId, ...createdAtFilter };
 
   const [
     totalOrders,
@@ -28,24 +33,23 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
     lowStockProducts,
     unreadNotifications,
   ] = await Promise.all([
-    prisma.order.count({ where: createdAtFilter }),
-    prisma.order.count({ where: { ...createdAtFilter, status: 'NEW' } }),
-    prisma.order.count({ where: { ...createdAtFilter, status: 'DELIVERED' } }),
-    prisma.order.count({ where: { ...createdAtFilter, status: 'CANCELLED' } }),
+    prisma.order.count({ where: orgFilter }),
+    prisma.order.count({ where: { ...orgFilter, status: 'NEW' } }),
+    prisma.order.count({ where: { ...orgFilter, status: 'DELIVERED' } }),
+    prisma.order.count({ where: { ...orgFilter, status: 'CANCELLED' } }),
     prisma.order.aggregate({
-      where: { ...createdAtFilter, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+      where: { ...orgFilter, status: { notIn: ['CANCELLED', 'RETURNED'] } },
       _sum: { total: true },
     }),
-    prisma.customer.count({ where: createdAtFilter }),
-    prisma.customer.count(),
-    prisma.product.count({ where: { active: true } }),
-    prisma.product.count({ where: { stock: { lt: 5 }, active: true } }),
-    prisma.notification.count({ where: { userId: req.user!.id, read: false } }),
+    prisma.customer.count({ where: { organizationId: orgId, ...createdAtFilter } }),
+    prisma.customer.count({ where: { organizationId: orgId } }),
+    prisma.product.count({ where: { organizationId: orgId, active: true } }),
+    prisma.product.count({ where: { organizationId: orgId, stock: { lt: 5 }, active: true } }),
+    prisma.notification.count({ where: { organizationId: orgId, userId: req.user!.id, read: false } }),
   ]);
 
-  // Get expenses for the period
   const expenses = await prisma.expense.aggregate({
-    where: dateFrom || dateTo ? { date: dateFilter } : {},
+    where: { organizationId: orgId, ...(dateFrom || dateTo ? { date: dateFilter } : {}) },
     _sum: { amount: true },
   });
 
@@ -53,43 +57,31 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
   const totalExpenses = expenses._sum.amount || 0;
 
   return res.json({
-    orders: {
-      total: totalOrders,
-      new: newOrders,
-      delivered: deliveredOrders,
-      cancelled: cancelledOrders,
-    },
+    orders: { total: totalOrders, new: newOrders, delivered: deliveredOrders, cancelled: cancelledOrders },
     revenue,
     expenses: totalExpenses,
     profit: revenue - totalExpenses,
-    customers: {
-      new: newCustomers,
-      total: totalCustomers,
-    },
-    products: {
-      total: totalProducts,
-      lowStock: lowStockProducts,
-    },
+    customers: { new: newCustomers, total: totalCustomers },
+    products: { total: totalProducts, lowStock: lowStockProducts },
     unreadNotifications,
   });
 };
 
 export const getOrdersByDay = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { days = '30' } = req.query as Record<string, string>;
   const daysNum = Math.min(365, Math.max(7, parseInt(days)));
 
-  // Use UTC-based arithmetic so day keys match order createdAt UTC dates
   const now = new Date();
   const todayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const from = new Date(todayUTC - (daysNum - 1) * 86400000);
 
   const orders = await prisma.order.findMany({
-    where: { createdAt: { gte: from } },
+    where: { organizationId: orgId, createdAt: { gte: from } },
     select: { createdAt: true, total: true, status: true },
     orderBy: { createdAt: 'asc' },
   });
 
-  // Group by UTC day — same key format as createdAt.toISOString()
   const byDay: Record<string, { date: string; orders: number; revenue: number }> = {};
 
   for (let i = 0; i < daysNum; i++) {
@@ -112,18 +104,12 @@ export const getOrdersByDay = async (req: AuthRequest, res: Response) => {
 };
 
 export const getRevenueByManager = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { dateFrom, dateTo } = req.query as Record<string, string>;
-
-  const dateFilter: Record<string, Date> = {};
-  if (dateFrom) dateFilter.gte = new Date(dateFrom);
-  if (dateTo) {
-    const end = new Date(dateTo);
-    end.setHours(23, 59, 59, 999);
-    dateFilter.lte = end;
-  }
+  const dateFilter = dateRange(dateFrom, dateTo);
 
   const managers = await prisma.user.findMany({
-    where: { role: { in: ['ADMIN', 'MANAGER'] } },
+    where: { organizationId: orgId, role: { in: ['ADMIN', 'MANAGER'] } },
     select: { id: true, name: true },
   });
 
@@ -131,6 +117,7 @@ export const getRevenueByManager = async (req: AuthRequest, res: Response) => {
     managers.map(async (m) => {
       const result = await prisma.order.aggregate({
         where: {
+          organizationId: orgId,
           managerId: m.id,
           status: { notIn: ['CANCELLED', 'RETURNED'] },
           ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
@@ -138,11 +125,7 @@ export const getRevenueByManager = async (req: AuthRequest, res: Response) => {
         _sum: { total: true },
         _count: { id: true },
       });
-      return {
-        manager: m.name,
-        revenue: result._sum.total || 0,
-        orders: result._count.id,
-      };
+      return { manager: m.name, revenue: result._sum.total || 0, orders: result._count.id };
     })
   );
 
@@ -150,24 +133,18 @@ export const getRevenueByManager = async (req: AuthRequest, res: Response) => {
 };
 
 export const getRevenueByProduct = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { dateFrom, dateTo, limit = '10' } = req.query as Record<string, string>;
+  const dateFilter = dateRange(dateFrom, dateTo);
+  const orderFilter = {
+    organizationId: orgId,
+    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+  };
 
-  const dateFilter: Record<string, Date> = {};
-  if (dateFrom) dateFilter.gte = new Date(dateFrom);
-  if (dateTo) {
-    const end = new Date(dateTo);
-    end.setHours(23, 59, 59, 999);
-    dateFilter.lte = end;
-  }
-
-  // Fetch delivered and returned items separately for redemption rate
   const [deliveredItems, returnedItems] = await Promise.all([
     prisma.orderItem.findMany({
       where: {
-        order: {
-          status: { notIn: ['CANCELLED', 'RETURNED'] },
-          ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
-        },
+        order: { ...orderFilter, status: { notIn: ['CANCELLED', 'RETURNED'] } },
       },
       select: {
         name: true,
@@ -179,10 +156,7 @@ export const getRevenueByProduct = async (req: AuthRequest, res: Response) => {
     }),
     prisma.orderItem.findMany({
       where: {
-        order: {
-          status: 'RETURNED',
-          ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
-        },
+        order: { ...orderFilter, status: 'RETURNED' },
       },
       select: { name: true, quantity: true, productId: true },
     }),
@@ -214,47 +188,36 @@ export const getRevenueByProduct = async (req: AuthRequest, res: Response) => {
 
   returnedItems.forEach((item) => {
     const key = item.productId || item.name;
-    if (byProduct[key]) {
-      byProduct[key].returned += item.quantity;
-    }
+    if (byProduct[key]) byProduct[key].returned += item.quantity;
   });
 
-  // Calculate redemption rate: delivered / (delivered + returned)
   Object.values(byProduct).forEach((p) => {
     const total = p.quantity + p.returned;
     p.redemptionRate = total > 0 ? Math.round((p.quantity / total) * 100 * 10) / 10 : 100;
   });
 
-  const sorted = Object.values(byProduct)
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, parseInt(limit));
-
+  const sorted = Object.values(byProduct).sort((a, b) => b.revenue - a.revenue).slice(0, parseInt(limit));
   return res.json(sorted);
 };
 
 export const getRevenueBySource = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { dateFrom, dateTo } = req.query as Record<string, string>;
-
-  const dateFilter: Record<string, Date> = {};
-  if (dateFrom) dateFilter.gte = new Date(dateFrom);
-  if (dateTo) {
-    const end = new Date(dateTo);
-    end.setHours(23, 59, 59, 999);
-    dateFilter.lte = end;
-  }
-  const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
+  const dateFilter = dateRange(dateFrom, dateTo);
+  const orderFilter = {
+    organizationId: orgId,
+    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+  };
 
   const [totalBySource, activeBySource] = await Promise.all([
-    // All orders by source
     prisma.order.groupBy({
       by: ['source'],
-      where: createdAtFilter,
+      where: orderFilter,
       _count: { id: true },
     }),
-    // Non-cancelled/returned: revenue + count
     prisma.order.groupBy({
       by: ['source'],
-      where: { ...createdAtFilter, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+      where: { ...orderFilter, status: { notIn: ['CANCELLED', 'RETURNED'] } },
       _sum: { total: true },
       _count: { id: true },
     }),
@@ -263,14 +226,8 @@ export const getRevenueBySource = async (req: AuthRequest, res: Response) => {
   const activeMap = new Map(activeBySource.map((r) => [r.source, r]));
 
   const SOURCE_LABELS: Record<string, string> = {
-    WEBSITE: 'Сайт',
-    LANDING: 'Лендинг',
-    MAGAZ: 'Магазин',
-    FACEBOOK: 'Facebook',
-    INSTAGRAM: 'Instagram',
-    MANUAL: 'Менеджер',
-    TELEGRAM: 'Telegram',
-    WEBHOOK: 'Webhook',
+    WEBSITE: 'Сайт', LANDING: 'Лендинг', MAGAZ: 'Магазин', FACEBOOK: 'Facebook',
+    INSTAGRAM: 'Instagram', MANUAL: 'Менеджер', TELEGRAM: 'Telegram', WEBHOOK: 'Webhook',
   };
 
   const data = totalBySource
@@ -295,26 +252,23 @@ export const getRevenueBySource = async (req: AuthRequest, res: Response) => {
 };
 
 export const getConversionByManager = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { dateFrom, dateTo } = req.query as Record<string, string>;
-
-  const dateFilter: Record<string, Date> = {};
-  if (dateFrom) dateFilter.gte = new Date(dateFrom);
-  if (dateTo) {
-    const end = new Date(dateTo);
-    end.setHours(23, 59, 59, 999);
-    dateFilter.lte = end;
-  }
-  const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
+  const dateFilter = dateRange(dateFrom, dateTo);
+  const orderFilter = {
+    organizationId: orgId,
+    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+  };
 
   const managers = await prisma.user.findMany({
-    where: { role: { in: ['ADMIN', 'MANAGER'] }, active: true },
+    where: { organizationId: orgId, role: { in: ['ADMIN', 'MANAGER'] }, active: true },
     select: { id: true, name: true },
   });
 
   const data = await Promise.all(
     managers.map(async (m) => {
       const orders = await prisma.order.findMany({
-        where: { managerId: m.id, ...createdAtFilter },
+        where: { ...orderFilter, managerId: m.id },
         select: {
           status: true,
           createdAt: true,
@@ -330,21 +284,17 @@ export const getConversionByManager = async (req: AuthRequest, res: Response) =>
       if (!orders.length) return null;
 
       const total = orders.length;
-      const confirmed = orders.filter((o) =>
-        ['CONFIRMED', 'SHIPPED', 'DELIVERED'].includes(o.status),
-      ).length;
+      const confirmed = orders.filter((o) => ['CONFIRMED', 'SHIPPED', 'DELIVERED'].includes(o.status)).length;
       const cancelled = orders.filter((o) => o.status === 'CANCELLED').length;
       const still_new = orders.filter((o) => o.status === 'NEW').length;
 
-      // Average response time: time from order.createdAt to first status change from NEW
       const responseTimes = orders
         .filter((o) => o.history.length > 0)
-        .map((o) => (o.history[0].createdAt.getTime() - o.createdAt.getTime()) / 60000); // minutes
+        .map((o) => (o.history[0].createdAt.getTime() - o.createdAt.getTime()) / 60000);
 
-      const avgResponseMinutes =
-        responseTimes.length > 0
-          ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length)
-          : null;
+      const avgResponseMinutes = responseTimes.length > 0
+        ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length)
+        : null;
 
       return {
         manager: m.name,
@@ -360,25 +310,19 @@ export const getConversionByManager = async (req: AuthRequest, res: Response) =>
   );
 
   return res.json(
-    data
-      .filter((d): d is NonNullable<typeof d> => d !== null)
-      .sort((a, b) => b.total - a.total),
+    data.filter((d): d is NonNullable<typeof d> => d !== null).sort((a, b) => b.total - a.total),
   );
 };
 
 export const getExpenses = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { dateFrom, dateTo, category, page = '1', limit = '20' } = req.query as Record<string, string>;
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = { organizationId: orgId };
   if (category) where.category = category;
   if (dateFrom || dateTo) {
-    where.date = {};
-    if (dateFrom) (where.date as Record<string, Date>).gte = new Date(dateFrom);
-    if (dateTo) {
-      const end = new Date(dateTo);
-      end.setHours(23, 59, 59, 999);
-      (where.date as Record<string, Date>).lte = end;
-    }
+    const f = dateRange(dateFrom, dateTo);
+    where.date = f;
   }
 
   const pageNum = Math.max(1, parseInt(page));
@@ -403,6 +347,7 @@ export const getExpenses = async (req: AuthRequest, res: Response) => {
 };
 
 export const createExpense = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { category, amount, description, date } = req.body;
 
   const validCategories = ['ADVERTISING', 'SERVICES', 'PURCHASE', 'OTHER'];
@@ -415,6 +360,7 @@ export const createExpense = async (req: AuthRequest, res: Response) => {
 
   const expense = await prisma.expense.create({
     data: {
+      organizationId: orgId,
       category,
       amount: parseFloat(amount),
       description: description?.trim() || null,
@@ -423,6 +369,7 @@ export const createExpense = async (req: AuthRequest, res: Response) => {
   });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'EXPENSE_CREATED',
     entityType: 'Expense',
@@ -435,9 +382,10 @@ export const createExpense = async (req: AuthRequest, res: Response) => {
 };
 
 export const deleteExpense = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
 
-  const expense = await prisma.expense.findUnique({ where: { id } });
+  const expense = await prisma.expense.findFirst({ where: { id, organizationId: orgId } });
   if (!expense) {
     return res.status(404).json({ error: 'Расход не найден' });
   }
@@ -445,6 +393,7 @@ export const deleteExpense = async (req: AuthRequest, res: Response) => {
   await prisma.expense.delete({ where: { id } });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'EXPENSE_DELETED',
     entityType: 'Expense',
@@ -456,41 +405,31 @@ export const deleteExpense = async (req: AuthRequest, res: Response) => {
   return res.json({ message: 'Expense deleted' });
 };
 
-// GET /api/analytics/redemption-rate
-// % выкупа: DELIVERED / (DELIVERED + RETURNED) — реальная метрика для товарки
 export const getRedemptionRate = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { dateFrom, dateTo } = req.query as Record<string, string>;
-
-  const dateFilter: Record<string, Date> = {};
-  if (dateFrom) dateFilter.gte = new Date(dateFrom);
-  if (dateTo) {
-    const end = new Date(dateTo);
-    end.setHours(23, 59, 59, 999);
-    dateFilter.lte = end;
-  }
-  const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
+  const dateFilter = dateRange(dateFrom, dateTo);
+  const orderFilter = {
+    organizationId: orgId,
+    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+  };
 
   const [shipped, delivered, returned] = await Promise.all([
-    prisma.order.count({ where: { ...createdAtFilter, status: 'SHIPPED' } }),
-    prisma.order.count({ where: { ...createdAtFilter, status: 'DELIVERED' } }),
-    prisma.order.count({ where: { ...createdAtFilter, status: 'RETURNED' } }),
+    prisma.order.count({ where: { ...orderFilter, status: 'SHIPPED' } }),
+    prisma.order.count({ where: { ...orderFilter, status: 'DELIVERED' } }),
+    prisma.order.count({ where: { ...orderFilter, status: 'RETURNED' } }),
   ]);
 
-  const resolved = delivered + returned; // посылки у которых уже известна судьба
+  const resolved = delivered + returned;
   const redemptionRate = resolved > 0 ? Math.round((delivered / resolved) * 100 * 10) / 10 : null;
 
-  // Revenue from delivered orders (реальные деньги)
   const revenueResult = await prisma.order.aggregate({
-    where: { ...createdAtFilter, status: 'DELIVERED' },
+    where: { ...orderFilter, status: 'DELIVERED' },
     _sum: { total: true },
   });
 
-  // Average order value for delivered
-  const avgOrderValue = delivered > 0
-    ? Math.round((revenueResult._sum.total ?? 0) / delivered)
-    : 0;
+  const avgOrderValue = delivered > 0 ? Math.round((revenueResult._sum.total ?? 0) / delivered) : 0;
 
-  // Trend: compare to previous equal period
   let prevRedemptionRate: number | null = null;
   if (dateFrom && dateTo) {
     const from = new Date(dateFrom);
@@ -498,52 +437,36 @@ export const getRedemptionRate = async (req: AuthRequest, res: Response) => {
     const periodMs = to.getTime() - from.getTime();
     const prevFrom = new Date(from.getTime() - periodMs);
     const prevTo = new Date(from.getTime() - 1);
-
-    const [prevDelivered, prevReturned] = await Promise.all([
-      prisma.order.count({ where: { createdAt: { gte: prevFrom, lte: prevTo }, status: 'DELIVERED' } }),
-      prisma.order.count({ where: { createdAt: { gte: prevFrom, lte: prevTo }, status: 'RETURNED' } }),
+    const [pd, pr] = await Promise.all([
+      prisma.order.count({ where: { organizationId: orgId, createdAt: { gte: prevFrom, lte: prevTo }, status: 'DELIVERED' } }),
+      prisma.order.count({ where: { organizationId: orgId, createdAt: { gte: prevFrom, lte: prevTo }, status: 'RETURNED' } }),
     ]);
-
-    const prevResolved = prevDelivered + prevReturned;
-    prevRedemptionRate = prevResolved > 0
-      ? Math.round((prevDelivered / prevResolved) * 100 * 10) / 10
-      : null;
+    const prevResolved = pd + pr;
+    prevRedemptionRate = prevResolved > 0 ? Math.round((pd / prevResolved) * 100 * 10) / 10 : null;
   }
 
   return res.json({
-    shipped,
-    delivered,
-    returned,
-    resolved,
-    redemptionRate,
-    prevRedemptionRate,
+    shipped, delivered, returned, resolved, redemptionRate, prevRedemptionRate,
     realRevenue: revenueResult._sum.total ?? 0,
     avgOrderValue,
   });
 };
 
-// GET /api/analytics/cancel-reasons
-// Топ причин отказа по количеству за период
 export const getCancelReasons = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { dateFrom, dateTo } = req.query as Record<string, string>;
-
-  const dateFilter: Record<string, Date> = {};
-  if (dateFrom) dateFilter.gte = new Date(dateFrom);
-  if (dateTo) {
-    const end = new Date(dateTo);
-    end.setHours(23, 59, 59, 999);
-    dateFilter.lte = end;
-  }
-  const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
+  const dateFilter = dateRange(dateFrom, dateTo);
+  const orderFilter = {
+    organizationId: orgId,
+    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+  };
 
   const cancelled = await prisma.order.findMany({
-    where: { ...createdAtFilter, status: 'CANCELLED' },
+    where: { ...orderFilter, status: 'CANCELLED' },
     select: { cancelReason: true, managerId: true, manager: { select: { name: true } } },
   });
 
   const total = cancelled.length;
-
-  // Group by reason
   const reasonMap: Record<string, number> = {};
   cancelled.forEach((o) => {
     const reason = o.cancelReason?.trim() || 'Не вказано';
@@ -558,7 +481,6 @@ export const getCancelReasons = async (req: AuthRequest, res: Response) => {
     }))
     .sort((a, b) => b.count - a.count);
 
-  // Group by manager
   const managerMap: Record<string, { name: string; count: number }> = {};
   cancelled.forEach((o) => {
     if (!o.managerId) return;
@@ -568,29 +490,22 @@ export const getCancelReasons = async (req: AuthRequest, res: Response) => {
   });
 
   const byManager = Object.values(managerMap).sort((a, b) => b.count - a.count);
-
   return res.json({ total, byReason, byManager });
 };
 
-// GET /api/analytics/customer-ltv
-// LTV клиентов: средний чек, повторные покупки, топ клиентов
 export const getCustomerLtv = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { dateFrom, dateTo, limit = '20' } = req.query as Record<string, string>;
+  const dateFilter = dateRange(dateFrom, dateTo);
 
-  const dateFilter: Record<string, Date> = {};
-  if (dateFrom) dateFilter.gte = new Date(dateFrom);
-  if (dateTo) {
-    const end = new Date(dateTo);
-    end.setHours(23, 59, 59, 999);
-    dateFilter.lte = end;
-  }
-  const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
-
-  // Customers with more than 1 order (repeat buyers)
   const customers = await prisma.customer.findMany({
     where: {
+      organizationId: orgId,
       orders: {
-        some: { ...createdAtFilter, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+        some: {
+          ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+          status: { notIn: ['CANCELLED', 'RETURNED'] },
+        },
       },
     },
     select: {
@@ -598,7 +513,10 @@ export const getCustomerLtv = async (req: AuthRequest, res: Response) => {
       name: true,
       phone: true,
       orders: {
-        where: { ...createdAtFilter, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+        where: {
+          ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+          status: { notIn: ['CANCELLED', 'RETURNED'] },
+        },
         select: { total: true, createdAt: true },
         orderBy: { createdAt: 'asc' },
       },
@@ -616,14 +534,10 @@ export const getCustomerLtv = async (req: AuthRequest, res: Response) => {
     lastOrder: c.orders[c.orders.length - 1]?.createdAt ?? null,
   }));
 
-  const sorted = withStats
-    .sort((a, b) => b.ltv - a.ltv)
-    .slice(0, parseInt(limit));
-
+  const sorted = withStats.sort((a, b) => b.ltv - a.ltv).slice(0, parseInt(limit));
   const repeatBuyers = withStats.filter((c) => c.ordersCount > 1).length;
   const totalWithOrders = withStats.length;
   const repeatRate = totalWithOrders > 0 ? Math.round((repeatBuyers / totalWithOrders) * 100 * 10) / 10 : 0;
-
   const avgLtv = withStats.length > 0
     ? Math.round(withStats.reduce((s, c) => s + c.ltv, 0) / withStats.length)
     : 0;
@@ -631,82 +545,61 @@ export const getCustomerLtv = async (req: AuthRequest, res: Response) => {
   return res.json({ customers: sorted, repeatBuyers, totalWithOrders, repeatRate, avgLtv });
 };
 
-// GET /api/analytics/cc-stats
-// Дашборд колл-центра: сколько обзвонено, % подтверждений, по операторам
 export const getCcStats = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { dateFrom, dateTo } = req.query as Record<string, string>;
-
-  const dateFilter: Record<string, Date> = {};
-  if (dateFrom) dateFilter.gte = new Date(dateFrom);
-  if (dateTo) {
-    const end = new Date(dateTo);
-    end.setHours(23, 59, 59, 999);
-    dateFilter.lte = end;
-  }
-  const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
+  const dateFilter = dateRange(dateFrom, dateTo);
+  const orderFilter = {
+    organizationId: orgId,
+    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+  };
 
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   const [
-    todayOrders,
-    todayCalled,
-    todayConfirmed,
-    todayCancelled,
-    todayNoAnswer,
-    periodOrders,
-    periodCalled,
-    periodConfirmed,
-    periodCancelled,
-    periodNoAnswer,
-    pendingCallbacks,
-    overdueCallbacks,
+    todayOrders, todayCalled, todayConfirmed, todayCancelled, todayNoAnswer,
+    periodOrders, periodCalled, periodConfirmed, periodCancelled, periodNoAnswer,
+    pendingCallbacks, overdueCallbacks,
   ] = await Promise.all([
-    prisma.order.count({ where: { createdAt: { gte: todayStart } } }),
-    prisma.order.count({ where: { createdAt: { gte: todayStart }, status: { in: ['CALLED', 'CONFIRMED', 'CANCELLED'] } } }),
-    prisma.order.count({ where: { createdAt: { gte: todayStart }, status: 'CONFIRMED' } }),
-    prisma.order.count({ where: { createdAt: { gte: todayStart }, status: 'CANCELLED' } }),
-    prisma.order.count({ where: { createdAt: { gte: todayStart }, status: 'NO_ANSWER' } }),
-    prisma.order.count({ where: createdAtFilter }),
-    prisma.order.count({ where: { ...createdAtFilter, status: { in: ['CALLED', 'CONFIRMED', 'CANCELLED'] } } }),
-    prisma.order.count({ where: { ...createdAtFilter, status: 'CONFIRMED' } }),
-    prisma.order.count({ where: { ...createdAtFilter, status: 'CANCELLED' } }),
-    prisma.order.count({ where: { ...createdAtFilter, status: 'NO_ANSWER' } }),
-    prisma.callback.count({ where: { done: false, scheduledAt: { gte: now } } }),
-    prisma.callback.count({ where: { done: false, scheduledAt: { lt: now } } }),
+    prisma.order.count({ where: { organizationId: orgId, createdAt: { gte: todayStart } } }),
+    prisma.order.count({ where: { organizationId: orgId, createdAt: { gte: todayStart }, status: { in: ['CALLED', 'CONFIRMED', 'CANCELLED'] } } }),
+    prisma.order.count({ where: { organizationId: orgId, createdAt: { gte: todayStart }, status: 'CONFIRMED' } }),
+    prisma.order.count({ where: { organizationId: orgId, createdAt: { gte: todayStart }, status: 'CANCELLED' } }),
+    prisma.order.count({ where: { organizationId: orgId, createdAt: { gte: todayStart }, status: 'NO_ANSWER' } }),
+    prisma.order.count({ where: orderFilter }),
+    prisma.order.count({ where: { ...orderFilter, status: { in: ['CALLED', 'CONFIRMED', 'CANCELLED'] } } }),
+    prisma.order.count({ where: { ...orderFilter, status: 'CONFIRMED' } }),
+    prisma.order.count({ where: { ...orderFilter, status: 'CANCELLED' } }),
+    prisma.order.count({ where: { ...orderFilter, status: 'NO_ANSWER' } }),
+    prisma.callback.count({ where: { organizationId: orgId, done: false, scheduledAt: { gte: now } } }),
+    prisma.callback.count({ where: { organizationId: orgId, done: false, scheduledAt: { lt: now } } }),
   ]);
 
-  // Per-operator stats (CALL_CENTER + ADMIN)
   const operators = await prisma.user.findMany({
-    where: { role: { in: ['CALL_CENTER', 'ADMIN'] }, active: true },
+    where: { organizationId: orgId, role: { in: ['CALL_CENTER', 'ADMIN'] }, active: true },
     select: { id: true, name: true },
   });
 
   const operatorStats = await Promise.all(
     operators.map(async (op) => {
       const [total, confirmed, cancelled, noAnswer] = await Promise.all([
-        prisma.order.count({ where: { ...createdAtFilter, managerId: op.id } }),
-        prisma.order.count({ where: { ...createdAtFilter, managerId: op.id, status: 'CONFIRMED' } }),
-        prisma.order.count({ where: { ...createdAtFilter, managerId: op.id, status: 'CANCELLED' } }),
-        prisma.order.count({ where: { ...createdAtFilter, managerId: op.id, status: 'NO_ANSWER' } }),
+        prisma.order.count({ where: { ...orderFilter, managerId: op.id } }),
+        prisma.order.count({ where: { ...orderFilter, managerId: op.id, status: 'CONFIRMED' } }),
+        prisma.order.count({ where: { ...orderFilter, managerId: op.id, status: 'CANCELLED' } }),
+        prisma.order.count({ where: { ...orderFilter, managerId: op.id, status: 'NO_ANSWER' } }),
       ]);
       const called = confirmed + cancelled;
       return {
-        operatorId: op.id,
-        name: op.name,
-        total,
-        called,
-        confirmed,
-        cancelled,
-        noAnswer,
+        operatorId: op.id, name: op.name,
+        total, called, confirmed, cancelled, noAnswer,
         confirmRate: called > 0 ? Math.round((confirmed / called) * 100 * 10) / 10 : null,
       };
     }),
   );
 
-  // Top cancel reasons for period
   const cancelledOrders = await prisma.order.findMany({
-    where: { ...createdAtFilter, status: 'CANCELLED' },
+    where: { ...orderFilter, status: 'CANCELLED' },
     select: { cancelReason: true },
   });
   const reasonMap: Record<string, number> = {};
@@ -723,104 +616,67 @@ export const getCcStats = async (req: AuthRequest, res: Response) => {
   const periodConfirmRate = periodCalled > 0 ? Math.round((periodConfirmed / periodCalled) * 100 * 10) / 10 : null;
 
   return res.json({
-    today: {
-      orders: todayOrders,
-      called: todayCalled,
-      confirmed: todayConfirmed,
-      cancelled: todayCancelled,
-      noAnswer: todayNoAnswer,
-      confirmRate: todayConfirmRate,
-    },
-    period: {
-      orders: periodOrders,
-      called: periodCalled,
-      confirmed: periodConfirmed,
-      cancelled: periodCancelled,
-      noAnswer: periodNoAnswer,
-      confirmRate: periodConfirmRate,
-    },
-    pendingCallbacks,
-    overdueCallbacks,
+    today: { orders: todayOrders, called: todayCalled, confirmed: todayConfirmed, cancelled: todayCancelled, noAnswer: todayNoAnswer, confirmRate: todayConfirmRate },
+    period: { orders: periodOrders, called: periodCalled, confirmed: periodConfirmed, cancelled: periodCancelled, noAnswer: periodNoAnswer, confirmRate: periodConfirmRate },
+    pendingCallbacks, overdueCallbacks,
     operators: operatorStats.filter((o) => o.total > 0).sort((a, b) => b.total - a.total),
     topCancelReasons,
   });
 };
 
-// GET /api/analytics/cc-payroll
-// Расчёт зарплаты колл-центра: подтверждённые заказы × 10 + допродажи × 20%
 export const getCcPayroll = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { dateFrom, dateTo } = req.query as Record<string, string>;
+  const dateFilter = dateRange(dateFrom, dateTo);
+  const orderFilter = {
+    organizationId: orgId,
+    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+  };
 
-  const dateFilter: Record<string, Date> = {};
-  if (dateFrom) dateFilter.gte = new Date(dateFrom);
-  if (dateTo) {
-    const end = new Date(dateTo);
-    end.setHours(23, 59, 59, 999);
-    dateFilter.lte = end;
-  }
-  const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
+  const CONFIRM_RATE = 10;
+  const UPSELL_RATE = 0.20;
 
-  const CONFIRM_RATE = 10;    // грн за 1 підтверджений заказ
-  const UPSELL_RATE = 0.20;   // 20% від суми допродажу
-
-  // All CC operators
   const operators = await prisma.user.findMany({
-    where: { role: { in: ['CALL_CENTER', 'ADMIN'] }, active: true },
+    where: { organizationId: orgId, role: { in: ['CALL_CENTER', 'ADMIN'] }, active: true },
     select: { id: true, name: true },
   });
 
   const operatorStats = await Promise.all(
     operators.map(async (op) => {
-      // Confirmed orders (includes CONFIRMED, SHIPPED, DELIVERED — тобто пройшли підтвердження)
       const confirmedOrders = await prisma.order.count({
-        where: {
-          managerId: op.id,
-          status: { in: ['CONFIRMED', 'SHIPPED', 'DELIVERED'] },
-          ...createdAtFilter,
-        },
+        where: { ...orderFilter, managerId: op.id, status: { in: ['CONFIRMED', 'SHIPPED', 'DELIVERED'] } },
       });
 
-      // Upsell: sum OrderItems named 'Доп. продаж' on confirmed orders of this operator
       const upsellItems = await prisma.orderItem.findMany({
         where: {
           name: 'Доп. продаж',
-          order: {
-            managerId: op.id,
-            status: { in: ['CONFIRMED', 'SHIPPED', 'DELIVERED'] },
-            ...createdAtFilter,
-          },
+          order: { ...orderFilter, managerId: op.id, status: { in: ['CONFIRMED', 'SHIPPED', 'DELIVERED'] } },
         },
         select: { price: true, quantity: true },
       });
 
       const upsellAmount = upsellItems.reduce((sum, i) => sum + i.price * i.quantity, 0);
-
       const confirmedBonus = confirmedOrders * CONFIRM_RATE;
       const upsellBonus = Math.round(upsellAmount * UPSELL_RATE * 100) / 100;
       const totalEarned = confirmedBonus + upsellBonus;
 
-      // Already paid
       const paymentsResult = await prisma.ccPayment.aggregate({
-        where: { operatorId: op.id },
+        where: { organizationId: orgId, operatorId: op.id },
         _sum: { amount: true },
       });
       const totalPaid = paymentsResult._sum.amount ?? 0;
 
-      // Recent payments list
       const payments = await prisma.ccPayment.findMany({
-        where: { operatorId: op.id },
+        where: { organizationId: orgId, operatorId: op.id },
         orderBy: { createdAt: 'desc' },
         take: 10,
         select: { id: true, amount: true, note: true, createdAt: true },
       });
 
       return {
-        operatorId: op.id,
-        name: op.name,
-        confirmedOrders,
-        confirmedBonus,
-        upsellAmount: Math.round(upsellAmount * 100) / 100,
-        upsellBonus,
+        operatorId: op.id, name: op.name,
+        confirmedOrders, confirmedBonus,
+        upsellAmount: Math.round(upsellAmount * 100) / 100, upsellBonus,
         totalEarned,
         totalPaid: Math.round(totalPaid * 100) / 100,
         balance: Math.round((totalEarned - totalPaid) * 100) / 100,
@@ -830,34 +686,32 @@ export const getCcPayroll = async (req: AuthRequest, res: Response) => {
   );
 
   return res.json({
-    operators: operatorStats.filter((o) => o.confirmedOrders > 0 || o.totalPaid > 0).sort((a, b) => b.totalEarned - a.totalEarned),
+    operators: operatorStats
+      .filter((o) => o.confirmedOrders > 0 || o.totalPaid > 0)
+      .sort((a, b) => b.totalEarned - a.totalEarned),
     rates: { confirmRate: CONFIRM_RATE, upsellRate: UPSELL_RATE },
   });
 };
 
-// POST /api/analytics/cc-payroll
-// Зафіксувати виплату оператору
 export const createCcPayment = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { operatorId, amount, note } = req.body;
 
   if (!operatorId || !amount || parseFloat(amount) <= 0) {
     return res.status(400).json({ error: 'operatorId and positive amount required' });
   }
 
-  const operator = await prisma.user.findUnique({ where: { id: operatorId } });
+  const operator = await prisma.user.findFirst({ where: { id: operatorId, organizationId: orgId } });
   if (!operator) {
     return res.status(404).json({ error: 'Operator not found' });
   }
 
   const payment = await prisma.ccPayment.create({
-    data: {
-      operatorId,
-      amount: parseFloat(amount),
-      note: note?.trim() || null,
-    },
+    data: { organizationId: orgId, operatorId, amount: parseFloat(amount), note: note?.trim() || null },
   });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'CC_PAYMENT_CREATED',
     entityType: 'CcPayment',
@@ -869,19 +723,17 @@ export const createCcPayment = async (req: AuthRequest, res: Response) => {
   return res.status(201).json(payment);
 };
 
-// DELETE /api/analytics/cc-payroll/:id
-// Скасувати виплату
 export const deleteCcPayment = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
 
-  const payment = await prisma.ccPayment.findUnique({ where: { id } });
-  if (!payment) {
-    return res.status(404).json({ error: 'Payment not found' });
-  }
+  const payment = await prisma.ccPayment.findFirst({ where: { id, organizationId: orgId } });
+  if (!payment) return res.status(404).json({ error: 'Payment not found' });
 
   await prisma.ccPayment.delete({ where: { id } });
 
   await logActivity({
+    organizationId: orgId,
     userId: req.user?.id,
     action: 'CC_PAYMENT_DELETED',
     entityType: 'CcPayment',
@@ -893,47 +745,39 @@ export const deleteCcPayment = async (req: AuthRequest, res: Response) => {
   return res.json({ message: 'Payment deleted' });
 };
 
-// GET /api/analytics/kpi
-// Ключевые метрики для дашборда: сегодня, 30 дней, redemption rate, в пути
-export const getKpi = async (_req: AuthRequest, res: Response) => {
+export const getKpi = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
+  const orgFilter = { organizationId: orgId };
+
   const [
-    todayOrders,
-    todayRevenue,
-    monthOrders,
-    monthRevenue,
-    monthExpenses,
-    inTransit,
-    delivered30,
-    returned30,
-    pendingCallbacks,
-    weeklyOrders,
-    newOrders,
+    todayOrders, todayRevenue, monthOrders, monthRevenue, monthExpenses,
+    inTransit, delivered30, returned30, pendingCallbacks, weeklyOrders, newOrders,
   ] = await Promise.all([
-    prisma.order.count({ where: { createdAt: { gte: todayStart } } }),
+    prisma.order.count({ where: { ...orgFilter, createdAt: { gte: todayStart } } }),
     prisma.order.aggregate({
-      where: { createdAt: { gte: todayStart }, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+      where: { ...orgFilter, createdAt: { gte: todayStart }, status: { notIn: ['CANCELLED', 'RETURNED'] } },
       _sum: { total: true },
     }),
-    prisma.order.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+    prisma.order.count({ where: { ...orgFilter, createdAt: { gte: thirtyDaysAgo } } }),
     prisma.order.aggregate({
-      where: { createdAt: { gte: thirtyDaysAgo }, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+      where: { ...orgFilter, createdAt: { gte: thirtyDaysAgo }, status: { notIn: ['CANCELLED', 'RETURNED'] } },
       _sum: { total: true },
     }),
     prisma.expense.aggregate({
-      where: { date: { gte: thirtyDaysAgo } },
+      where: { ...orgFilter, date: { gte: thirtyDaysAgo } },
       _sum: { amount: true },
     }),
-    prisma.order.count({ where: { status: 'SHIPPED' } }),
-    prisma.order.count({ where: { createdAt: { gte: thirtyDaysAgo }, status: 'DELIVERED' } }),
-    prisma.order.count({ where: { createdAt: { gte: thirtyDaysAgo }, status: 'RETURNED' } }),
-    prisma.callback.count({ where: { done: false, scheduledAt: { lte: new Date(now.getTime() + 24 * 60 * 60 * 1000) } } }),
-    prisma.order.count({ where: { createdAt: { gte: sevenDaysAgo } } }),
-    prisma.order.count({ where: { status: 'NEW' } }),
+    prisma.order.count({ where: { ...orgFilter, status: 'SHIPPED' } }),
+    prisma.order.count({ where: { ...orgFilter, createdAt: { gte: thirtyDaysAgo }, status: 'DELIVERED' } }),
+    prisma.order.count({ where: { ...orgFilter, createdAt: { gte: thirtyDaysAgo }, status: 'RETURNED' } }),
+    prisma.callback.count({ where: { ...orgFilter, done: false, scheduledAt: { lte: new Date(now.getTime() + 24 * 60 * 60 * 1000) } } }),
+    prisma.order.count({ where: { ...orgFilter, createdAt: { gte: sevenDaysAgo } } }),
+    prisma.order.count({ where: { ...orgFilter, status: 'NEW' } }),
   ]);
 
   const monthRevenueVal = monthRevenue._sum.total ?? 0;
@@ -942,22 +786,11 @@ export const getKpi = async (_req: AuthRequest, res: Response) => {
   const redemptionRate = resolved > 0 ? Math.round((delivered30 / resolved) * 100 * 10) / 10 : null;
 
   return res.json({
-    today: {
-      orders: todayOrders,
-      revenue: todayRevenue._sum.total ?? 0,
-    },
+    today: { orders: todayOrders, revenue: todayRevenue._sum.total ?? 0 },
     month: {
-      orders: monthOrders,
-      revenue: monthRevenueVal,
-      expenses: monthExpensesVal,
+      orders: monthOrders, revenue: monthRevenueVal, expenses: monthExpensesVal,
       profit: monthRevenueVal - monthExpensesVal,
     },
-    inTransit,
-    newOrders,
-    redemptionRate,
-    delivered30,
-    returned30,
-    pendingCallbacks,
-    weeklyOrders,
+    inTransit, newOrders, redemptionRate, delivered30, returned30, pendingCallbacks, weeklyOrders,
   });
 };

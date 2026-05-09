@@ -3,9 +3,11 @@ import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 
 export const getNotifications = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { unreadOnly, page = '1', limit = '20' } = req.query as Record<string, string>;
 
   const where: Record<string, unknown> = {
+    organizationId: orgId,
     userId: req.user!.id,
   };
   if (unreadOnly === 'true') where.read = false;
@@ -21,7 +23,9 @@ export const getNotifications = async (req: AuthRequest, res: Response) => {
       take: limitNum,
     }),
     prisma.notification.count({ where }),
-    prisma.notification.count({ where: { userId: req.user!.id, read: false } }),
+    prisma.notification.count({
+      where: { organizationId: orgId, userId: req.user!.id, read: false },
+    }),
   ]);
 
   return res.json({
@@ -32,10 +36,11 @@ export const getNotifications = async (req: AuthRequest, res: Response) => {
 };
 
 export const markRead = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
 
   await prisma.notification.updateMany({
-    where: { id, userId: req.user!.id },
+    where: { id, organizationId: orgId, userId: req.user!.id },
     data: { read: true },
   });
 
@@ -43,8 +48,9 @@ export const markRead = async (req: AuthRequest, res: Response) => {
 };
 
 export const markAllRead = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   await prisma.notification.updateMany({
-    where: { userId: req.user!.id, read: false },
+    where: { organizationId: orgId, userId: req.user!.id, read: false },
     data: { read: true },
   });
 
@@ -52,18 +58,20 @@ export const markAllRead = async (req: AuthRequest, res: Response) => {
 };
 
 export const markReadByEntity = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { entityId } = req.params;
   await prisma.notification.updateMany({
-    where: { entityId, userId: req.user!.id, read: false },
+    where: { entityId, organizationId: orgId, userId: req.user!.id, read: false },
     data: { read: true },
   });
   return res.json({ message: 'Marked as read' });
 };
 
 export const deleteNotification = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
   await prisma.notification.deleteMany({
-    where: { id, userId: req.user!.id },
+    where: { id, organizationId: orgId, userId: req.user!.id },
   });
   return res.json({ message: 'Deleted' });
 };

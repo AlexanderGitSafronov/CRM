@@ -1,12 +1,13 @@
 import { Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import prisma from '../services/prisma';
 import { notifyNewOrder, logActivity } from '../services/notifications';
 import { broadcastEvent } from '../services/eventBus';
 import { getNextManagerId } from '../services/roundRobin';
+import { AuthRequest } from '../middleware/auth';
 
+// Public webhook endpoint — token determines which org the order belongs to
 export const receiveOrder = async (req: Request, res: Response) => {
-  // Validate webhook token
   const token =
     (req.headers['x-webhook-token'] as string) ||
     (req.query.token as string);
@@ -17,11 +18,14 @@ export const receiveOrder = async (req: Request, res: Response) => {
 
   const webhookToken = await prisma.webhookToken.findUnique({
     where: { token },
+    select: { active: true, organizationId: true, organization: { select: { active: true } } },
   });
 
-  if (!webhookToken || !webhookToken.active) {
+  if (!webhookToken || !webhookToken.active || !webhookToken.organization?.active) {
     return res.status(401).json({ error: 'Invalid webhook token' });
   }
+
+  const orgId = webhookToken.organizationId;
 
   const { customer, items, source = 'WEBHOOK', comment, delivery } = req.body;
 
@@ -33,14 +37,14 @@ export const receiveOrder = async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'items array required' });
   }
 
-  // Find or create customer
   let dbCustomer = await prisma.customer.findUnique({
-    where: { phone: customer.phone.trim() },
+    where: { organizationId_phone: { organizationId: orgId, phone: customer.phone.trim() } },
   });
 
   if (!dbCustomer) {
     dbCustomer = await prisma.customer.create({
       data: {
+        organizationId: orgId,
         name: customer.name.trim(),
         phone: customer.phone.trim(),
         email: customer.email?.trim() || null,
@@ -59,14 +63,18 @@ export const receiveOrder = async (req: Request, res: Response) => {
     0
   );
 
-  const lastOrder = await prisma.order.findFirst({ orderBy: { orderNum: 'desc' }, select: { orderNum: true } });
+  const lastOrder = await prisma.order.findFirst({
+    where: { organizationId: orgId },
+    orderBy: { orderNum: 'desc' },
+    select: { orderNum: true },
+  });
   const orderNum = (lastOrder?.orderNum ?? 0) + 1;
 
-  // Auto-assign manager via round-robin
-  const autoManagerId = await getNextManagerId();
+  const autoManagerId = await getNextManagerId(orgId);
 
   const order = await prisma.order.create({
     data: {
+      organizationId: orgId,
       orderNum,
       customerId: dbCustomer.id,
       managerId: autoManagerId,
@@ -100,9 +108,10 @@ export const receiveOrder = async (req: Request, res: Response) => {
     },
   });
 
-  broadcastEvent('new_order', { orderNum: order.orderNum, source });
+  broadcastEvent(orgId, 'new_order', { orderNum: order.orderNum, source });
 
   await notifyNewOrder({
+    organizationId: orgId,
     id: order.id,
     orderNum: order.orderNum,
     customer: order.customer,
@@ -112,6 +121,7 @@ export const receiveOrder = async (req: Request, res: Response) => {
   });
 
   await logActivity({
+    organizationId: orgId,
     action: 'WEBHOOK_ORDER',
     entityType: 'Order',
     entityId: order.id,
@@ -127,28 +137,38 @@ export const receiveOrder = async (req: Request, res: Response) => {
   });
 };
 
-export const getWebhookTokens = async (req: Request, res: Response) => {
+export const getWebhookTokens = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const tokens = await prisma.webhookToken.findMany({
+    where: { organizationId: orgId },
     orderBy: { createdAt: 'desc' },
   });
   return res.json(tokens);
 };
 
-export const createWebhookToken = async (req: Request, res: Response) => {
+export const createWebhookToken = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { name } = req.body;
   if (!name?.trim()) {
     return res.status(400).json({ error: 'Name required' });
   }
 
   const token = await prisma.webhookToken.create({
-    data: { name: name.trim(), token: uuidv4() },
+    data: {
+      organizationId: orgId,
+      name: name.trim(),
+      token: crypto.randomBytes(24).toString('hex'),
+    },
   });
 
   return res.status(201).json(token);
 };
 
-export const deleteWebhookToken = async (req: Request, res: Response) => {
+export const deleteWebhookToken = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
   const { id } = req.params;
+  const existing = await prisma.webhookToken.findFirst({ where: { id, organizationId: orgId }, select: { id: true } });
+  if (!existing) return res.status(404).json({ error: 'Token not found' });
   await prisma.webhookToken.delete({ where: { id } });
   return res.json({ message: 'Token deleted' });
 };

@@ -2,14 +2,15 @@ import prisma from './prisma';
 import { sendTelegramMessage, formatOrderNotification } from './telegram';
 import logger from '../utils/logger';
 
-
 export async function createNotification({
+  organizationId,
   userId,
   type,
   title,
   message,
   entityId,
 }: {
+  organizationId: string;
   userId?: string | null;
   type: string;
   title: string;
@@ -19,17 +20,19 @@ export async function createNotification({
   try {
     if (userId) {
       await prisma.notification.create({
-        data: { userId, type, title, message, entityId },
+        data: { organizationId, userId, type, title, message, entityId },
       });
     } else {
-      // Notify all admins and managers
+      // Notify all admins and managers in this organization
       const users = await prisma.user.findMany({
-        where: { active: true, role: { in: ['ADMIN', 'MANAGER'] } },
+        where: { organizationId, active: true, role: { in: ['ADMIN', 'MANAGER'] } },
         select: { id: true },
       });
-      await prisma.notification.createMany({
-        data: users.map((u) => ({ userId: u.id, type, title, message, entityId })),
-      });
+      if (users.length) {
+        await prisma.notification.createMany({
+          data: users.map((u) => ({ organizationId, userId: u.id, type, title, message, entityId })),
+        });
+      }
     }
   } catch (error) {
     logger.error('Create notification error:', error);
@@ -37,6 +40,7 @@ export async function createNotification({
 }
 
 export async function notifyNewOrder(order: {
+  organizationId: string;
   id: string;
   orderNum: number;
   customer: { name: string; phone: string };
@@ -45,16 +49,17 @@ export async function notifyNewOrder(order: {
   items: Array<{ name: string; quantity: number; price: number }>;
 }) {
   await createNotification({
+    organizationId: order.organizationId,
     type: 'NEW_ORDER',
     title: `Новый заказ #${order.orderNum}`,
     message: `${order.customer.name} — ${order.total.toLocaleString('uk-UA')} грн`,
     entityId: order.id,
   });
 
-  // Send Telegram notification if configured
+  // Send Telegram notification if configured for this org
   try {
     const telegramIntegration = await prisma.integration.findUnique({
-      where: { type: 'TELEGRAM' },
+      where: { organizationId_type: { organizationId: order.organizationId, type: 'TELEGRAM' } },
     });
 
     if (telegramIntegration?.active) {
@@ -78,6 +83,7 @@ export async function notifyNewOrder(order: {
 }
 
 export async function logActivity({
+  organizationId,
   userId,
   action,
   entityType,
@@ -85,6 +91,7 @@ export async function logActivity({
   details,
   ip,
 }: {
+  organizationId: string;
   userId?: string;
   action: string;
   entityType?: string;
@@ -94,7 +101,7 @@ export async function logActivity({
 }) {
   try {
     await prisma.activityLog.create({
-      data: { userId, action, entityType, entityId, details, ip },
+      data: { organizationId, userId, action, entityType, entityId, details, ip },
     });
   } catch (error) {
     logger.error('Log activity error:', error);

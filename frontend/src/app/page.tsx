@@ -161,17 +161,25 @@ export default function HomePage() {
             <a href="#roles" className="hover:text-white transition-colors">Роли</a>
             <a href="#tech" className="hover:text-white transition-colors">Технологии</a>
           </div>
-          <button
-            onClick={() => router.push('/login')}
-            className="group relative inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium overflow-hidden"
-          >
-            <span className="absolute inset-0 bg-gradient-to-r from-blue-600 via-violet-600 to-fuchsia-600 opacity-90 group-hover:opacity-100 transition-opacity" />
-            <span className="absolute inset-0 bg-gradient-to-r from-blue-600 via-violet-600 to-fuchsia-600 blur-lg opacity-50 group-hover:opacity-80 transition-opacity" />
-            <span className="relative flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => router.push('/login')}
+              className="px-4 py-2 rounded-xl text-sm font-medium text-white/70 hover:text-white hover:bg-white/5 transition-colors"
+            >
               Войти
-              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-            </span>
-          </button>
+            </button>
+            <button
+              onClick={() => router.push('/register')}
+              className="group relative inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium overflow-hidden"
+            >
+              <span className="absolute inset-0 bg-gradient-to-r from-blue-600 via-violet-600 to-fuchsia-600 opacity-90 group-hover:opacity-100 transition-opacity" />
+              <span className="absolute inset-0 bg-gradient-to-r from-blue-600 via-violet-600 to-fuchsia-600 blur-lg opacity-50 group-hover:opacity-80 transition-opacity" />
+              <span className="relative flex items-center gap-2">
+                Начать бесплатно
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+              </span>
+            </button>
+          </div>
         </nav>
       </header>
 
@@ -199,13 +207,13 @@ export default function HomePage() {
 
           <div className="reveal reveal-4 mt-10 flex flex-col sm:flex-row items-center gap-4">
             <button
-              onClick={() => router.push('/login')}
+              onClick={() => router.push('/register')}
               className="group relative inline-flex items-center gap-2 px-7 py-3.5 rounded-xl font-medium overflow-hidden"
             >
               <span className="absolute inset-0 bg-gradient-to-r from-blue-600 via-violet-600 to-fuchsia-600" />
               <span className="absolute inset-0 bg-gradient-to-r from-blue-600 via-violet-600 to-fuchsia-600 blur-xl opacity-60 group-hover:opacity-100 transition-opacity" />
               <span className="relative flex items-center gap-2 text-white">
-                Начать работу
+                Начать бесплатно
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </span>
             </button>
@@ -216,6 +224,9 @@ export default function HomePage() {
               Посмотреть возможности
             </a>
           </div>
+          <p className="reveal reveal-5 mt-6 text-sm text-white/40">
+            Без кредитки · 3 пользователя · 500 заказов/мес
+          </p>
 
           {/* Hero preview / glass card */}
           <div className="reveal reveal-5 mt-20 w-full max-w-5xl">
@@ -470,13 +481,13 @@ export default function HomePage() {
               Войдите в систему и начните управлять заказами, клиентами и аналитикой уже сегодня.
             </p>
             <button
-              onClick={() => router.push('/login')}
+              onClick={() => router.push('/register')}
               className="mt-10 group relative inline-flex items-center gap-2 px-8 py-4 rounded-xl font-medium overflow-hidden"
             >
               <span className="absolute inset-0 bg-white" />
               <span className="absolute inset-0 bg-white blur-xl opacity-50 group-hover:opacity-100 transition-opacity" />
               <span className="relative flex items-center gap-2 text-gray-900">
-                Войти в CRM
+                Создать аккаунт бесплатно
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </span>
             </button>
