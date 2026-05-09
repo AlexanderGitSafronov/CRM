@@ -33,6 +33,133 @@ interface WebhookToken {
   createdAt: string;
 }
 
+const WEBHOOK_FIELDS: Array<[string, string, boolean, string]> = [
+  ['customer.name', 'string', true, 'ПІБ клієнта'],
+  ['customer.phone', 'string', true, 'Телефон у будь-якому форматі (+380...)'],
+  ['customer.email', 'string', false, 'Email клієнта'],
+  ['customer.city', 'string', false, 'Місто'],
+  ['customer.address', 'string', false, 'Адреса'],
+  ['items', 'array', true, 'Масив товарів (мінімум 1)'],
+  ['items[].name', 'string', true, 'Назва товару'],
+  ['items[].quantity', 'number', true, 'Кількість'],
+  ['items[].price', 'number', true, 'Ціна за одиницю (грн)'],
+  ['source', 'string', false, 'LANDING, WEBSITE, FACEBOOK, INSTAGRAM, TELEGRAM, WEBHOOK'],
+  ['comment', 'string', false, 'Коментар до замовлення'],
+  ['delivery.service', 'string', false, 'NOVA_POSHTA, UKRPOSHTA, COURIER, PICKUP'],
+  ['delivery.city', 'string', false, 'Місто доставки'],
+  ['delivery.address', 'string', false, 'Адреса / № відділення'],
+  ['delivery.recipientName', 'string', false, 'Отримувач (якщо інший)'],
+];
+
+function getCodeSample(lang: 'curl' | 'js' | 'php' | 'python', apiUrl: string, token: string): string {
+  const url = `${apiUrl}/api/webhook/order`;
+
+  if (lang === 'curl') {
+    return `curl -X POST ${url} \\
+  -H "Content-Type: application/json" \\
+  -H "X-Webhook-Token: ${token}" \\
+  -d '{
+    "customer": {
+      "name": "Іван Петров",
+      "phone": "+380501234567",
+      "email": "ivan@example.com",
+      "city": "Київ"
+    },
+    "items": [
+      { "name": "Товар 1", "quantity": 2, "price": 999 }
+    ],
+    "source": "LANDING",
+    "comment": "Замовлення з лендінгу"
+  }'`;
+  }
+
+  if (lang === 'js') {
+    return `// JavaScript / Node.js / форма на сайті
+const response = await fetch('${url}', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Webhook-Token': '${token}',
+  },
+  body: JSON.stringify({
+    customer: {
+      name: 'Іван Петров',
+      phone: '+380501234567',
+      email: 'ivan@example.com',
+      city: 'Київ',
+    },
+    items: [
+      { name: 'Товар 1', quantity: 2, price: 999 },
+    ],
+    source: 'LANDING',
+    comment: 'Замовлення з лендінгу',
+  }),
+});
+
+const data = await response.json();
+console.log(data); // { success: true, orderId: "...", orderNum: 42 }`;
+  }
+
+  if (lang === 'php') {
+    return `<?php
+$payload = [
+  'customer' => [
+    'name'  => 'Іван Петров',
+    'phone' => '+380501234567',
+    'email' => 'ivan@example.com',
+    'city'  => 'Київ',
+  ],
+  'items' => [
+    ['name' => 'Товар 1', 'quantity' => 2, 'price' => 999],
+  ],
+  'source'  => 'LANDING',
+  'comment' => 'Замовлення з лендінгу',
+];
+
+$ch = curl_init('${url}');
+curl_setopt_array($ch, [
+  CURLOPT_RETURNTRANSFER => true,
+  CURLOPT_POST           => true,
+  CURLOPT_POSTFIELDS     => json_encode($payload),
+  CURLOPT_HTTPHEADER     => [
+    'Content-Type: application/json',
+    'X-Webhook-Token: ${token}',
+  ],
+]);
+$response = curl_exec($ch);
+$status   = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
+
+echo $status === 201 ? 'Заказ створено' : "Помилка: $response";`;
+  }
+
+  // python
+  return `import requests
+
+response = requests.post(
+    '${url}',
+    headers={
+        'Content-Type': 'application/json',
+        'X-Webhook-Token': '${token}',
+    },
+    json={
+        'customer': {
+            'name': 'Іван Петров',
+            'phone': '+380501234567',
+            'email': 'ivan@example.com',
+            'city': 'Київ',
+        },
+        'items': [
+            {'name': 'Товар 1', 'quantity': 2, 'price': 999},
+        ],
+        'source': 'LANDING',
+        'comment': 'Замовлення з лендінгу',
+    },
+)
+
+print(response.json())  # {'success': True, 'orderId': '...', 'orderNum': 42}`;
+}
+
 interface Integration {
   id: string;
   type: string;
@@ -364,7 +491,10 @@ export default function SettingsPage() {
     CALL_CENTER: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
   };
 
-  const apiUrl = typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:3001` : 'http://localhost:3001';
+  // Real backend URL (env-configured), not host:3001
+  const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').replace(/\/$/, '');
+  const sampleToken = webhooks[0]?.token || 'YOUR_WEBHOOK_TOKEN';
+  const [docLang, setDocLang] = useState<'curl' | 'js' | 'php' | 'python'>('curl');
 
   return (
     <div className="p-4 sm:p-6 space-y-5">
@@ -467,33 +597,60 @@ export default function SettingsPage() {
       {/* Webhooks tab */}
       {activeTab === 'webhooks' && (
         <div className="space-y-4">
-          <div className="card p-5">
-            <h2 className="font-semibold text-gray-900 dark:text-white mb-2">Webhook для форм</h2>
-            <p className="text-sm text-gray-500 mb-4">
-              Используйте этот endpoint и токен для приёма заказов с ваших лендингов.
-            </p>
-            <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 font-mono text-sm text-gray-700 dark:text-gray-300">
-              POST {apiUrl}/api/webhook/order
-            </div>
-            <div className="mt-3 text-xs text-gray-500">
-              Добавьте заголовок: <code className="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">X-Webhook-Token: {'<your-token>'}</code>
+          {/* Quick start banner */}
+          <div className="rounded-xl border border-blue-200 dark:border-blue-900/40 bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/20 p-5">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center shrink-0">
+                <Webhook className="w-5 h-5 text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h2 className="font-semibold text-gray-900 dark:text-white mb-1">Прийом замовлень з лендінгу</h2>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Налаштуйте форму на сайті надсилати POST-запит на ваш endpoint — і нові заказы автоматично з&apos;являться в CRM.
+                </p>
+              </div>
             </div>
           </div>
 
+          {/* Endpoint */}
+          <div className="card p-5">
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">1. Endpoint</h3>
+            <div className="flex items-center gap-2 bg-gray-900 dark:bg-gray-950 text-gray-100 rounded-lg px-3 py-2.5 font-mono text-sm">
+              <span className="text-emerald-400 font-semibold shrink-0">POST</span>
+              <span className="truncate">{apiUrl}/api/webhook/order</span>
+              <button
+                onClick={() => handleCopy(`${apiUrl}/api/webhook/order`)}
+                className="ml-auto shrink-0 text-gray-400 hover:text-white p-1 rounded transition-colors"
+                title="Скопіювати"
+              >
+                {copiedToken === `${apiUrl}/api/webhook/order` ? <CheckCircle className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Додайте заголовок <code className="bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-[11px]">X-Webhook-Token</code> зі своїм токеном (з блоку нижче) або передайте токен як query-параметр <code className="bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-[11px]">?token=...</code>
+            </p>
+          </div>
+
+          {/* Tokens */}
           <div className="card overflow-hidden">
             <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-800">
-              <div className="flex items-center gap-2">
-                <Key className="w-4 h-4 text-gray-400" />
-                <h2 className="font-semibold text-gray-900 dark:text-white">Токены</h2>
+              <div>
+                <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                  <Key className="w-4 h-4 text-gray-400" /> 2. Ваші токени
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">Кожен лендінг може мати свій токен — для статистики джерел</p>
               </div>
               <button onClick={() => setShowWebhookForm(true)} className="btn-primary">
                 <Plus className="w-4 h-4" />
-                Создать токен
+                Створити токен
               </button>
             </div>
             <div className="divide-y divide-gray-50 dark:divide-gray-800/50">
               {webhooks.map((wh) => (
                 <div key={wh.id} className="flex items-center gap-3 p-4">
+                  <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
+                    <Key className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                  </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-sm text-gray-900 dark:text-white">{wh.name}</p>
                     <p className="font-mono text-xs text-gray-400 truncate">{wh.token}</p>
@@ -501,7 +658,7 @@ export default function SettingsPage() {
                   <button
                     onClick={() => handleCopy(wh.token)}
                     className="p-1.5 text-gray-400 hover:text-primary-600 rounded transition-colors"
-                    title="Скопировать"
+                    title="Скопіювати"
                   >
                     {copiedToken === wh.token ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                   </button>
@@ -514,30 +671,111 @@ export default function SettingsPage() {
                 </div>
               ))}
               {webhooks.length === 0 && (
-                <p className="p-6 text-center text-gray-400 text-sm">Токены не созданы</p>
+                <p className="p-6 text-center text-gray-400 text-sm">Токенів ще немає — створіть перший</p>
               )}
             </div>
           </div>
 
-          {/* Webhook payload example */}
+          {/* Code examples */}
+          <div className="card overflow-hidden">
+            <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-800">
+              <h3 className="font-semibold text-gray-900 dark:text-white">3. Приклад запиту</h3>
+              <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 p-0.5 rounded-lg">
+                {(['curl', 'js', 'php', 'python'] as const).map((lang) => (
+                  <button
+                    key={lang}
+                    onClick={() => setDocLang(lang)}
+                    className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                      docLang === lang
+                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                    }`}
+                  >
+                    {lang === 'js' ? 'JavaScript' : lang === 'curl' ? 'cURL' : lang === 'php' ? 'PHP' : 'Python'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="relative">
+              <button
+                onClick={() => handleCopy(getCodeSample(docLang, apiUrl, sampleToken))}
+                className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-white bg-gray-800/50 hover:bg-gray-700 rounded transition-colors"
+                title="Скопіювати"
+              >
+                {copiedToken === getCodeSample(docLang, apiUrl, sampleToken)
+                  ? <CheckCircle className="w-4 h-4 text-green-400" />
+                  : <Copy className="w-4 h-4" />}
+              </button>
+              <pre className="bg-gray-900 dark:bg-gray-950 text-gray-100 p-5 text-xs leading-relaxed overflow-x-auto">
+                <code>{getCodeSample(docLang, apiUrl, sampleToken)}</code>
+              </pre>
+            </div>
+          </div>
+
+          {/* Fields reference */}
           <div className="card p-5">
-            <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Пример запроса</h3>
-            <pre className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 text-xs text-gray-600 dark:text-gray-400 overflow-x-auto">{`curl -X POST ${apiUrl}/api/webhook/order \\
-  -H "Content-Type: application/json" \\
-  -H "X-Webhook-Token: demo-webhook-token-change-in-production" \\
-  -d '{
-    "customer": {
-      "name": "Иван Петров",
-      "phone": "+380501234567",
-      "email": "ivan@example.com",
-      "city": "Киев"
-    },
-    "items": [
-      { "name": "Товар 1", "quantity": 2, "price": 999 }
-    ],
-    "source": "LANDING",
-    "comment": "Комментарий"
-  }'`}</pre>
+            <h3 className="font-semibold text-gray-900 dark:text-white mb-3">4. Поля JSON</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 dark:border-gray-700">
+                    <th className="text-left py-2 pr-4 font-medium text-gray-500 text-xs">Поле</th>
+                    <th className="text-left py-2 pr-4 font-medium text-gray-500 text-xs">Тип</th>
+                    <th className="text-left py-2 pr-4 font-medium text-gray-500 text-xs">Обов&apos;язково</th>
+                    <th className="text-left py-2 font-medium text-gray-500 text-xs">Опис</th>
+                  </tr>
+                </thead>
+                <tbody className="text-gray-700 dark:text-gray-300">
+                  {WEBHOOK_FIELDS.map(([field, type, req, desc]) => (
+                    <tr key={field} className="border-b border-gray-100 dark:border-gray-800/50">
+                      <td className="py-2 pr-4 font-mono text-xs text-gray-900 dark:text-white whitespace-nowrap">{field}</td>
+                      <td className="py-2 pr-4 text-xs text-gray-500">{type}</td>
+                      <td className="py-2 pr-4 text-xs">
+                        {req
+                          ? <span className="text-rose-500 font-medium">так</span>
+                          : <span className="text-gray-400">ні</span>}
+                      </td>
+                      <td className="py-2 text-xs text-gray-600 dark:text-gray-400">{desc}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Response & errors */}
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="card p-5">
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-emerald-500" /> Успіх (201)
+              </h3>
+              <pre className="bg-gray-900 text-gray-100 rounded-lg p-3 text-xs leading-relaxed overflow-x-auto">{`{
+  "success": true,
+  "orderId": "cmoy...",
+  "orderNum": 42
+}`}</pre>
+            </div>
+            <div className="card p-5">
+              <h3 className="font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-rose-500" /> Помилки
+              </h3>
+              <ul className="text-xs text-gray-600 dark:text-gray-400 space-y-2">
+                <li><b className="text-gray-900 dark:text-white">401</b> — Невалідний або відсутній токен</li>
+                <li><b className="text-gray-900 dark:text-white">400</b> — Не вистачає полів (customer.name / phone / items)</li>
+                <li><b className="text-gray-900 dark:text-white">429</b> — Перевищено rate-limit (500 req / 15 хв)</li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Tips */}
+          <div className="rounded-xl border border-amber-200 dark:border-amber-900/40 bg-amber-50 dark:bg-amber-950/20 p-4">
+            <h4 className="font-semibold text-sm text-amber-900 dark:text-amber-300 mb-2">💡 Поради</h4>
+            <ul className="text-xs text-amber-800 dark:text-amber-200/80 space-y-1.5 list-disc pl-4">
+              <li>Токен можна передавати як заголовок <code>X-Webhook-Token</code> або як query: <code>?token=...</code> (зручно для тестування у браузері).</li>
+              <li>Якщо клієнт з таким телефоном вже існує — створиться новий заказ для нього (а не дубль).</li>
+              <li>Поле <code>source</code> впливає на аналітику «Джерела продажів» — використовуйте різні значення для різних лендінгів.</li>
+              <li>Заказ автоматично отримує <code>orderNum</code> (порядковий номер у вашому воркспейсі) і призначається менеджеру по round-robin.</li>
+            </ul>
           </div>
         </div>
       )}
