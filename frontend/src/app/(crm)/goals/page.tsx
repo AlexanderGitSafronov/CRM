@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import { Plus, Edit, Trash2, Target, Calendar, TrendingUp, ShoppingCart } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
+import { useT } from '@/stores/localeStore';
 
 interface Goal {
   id: string;
@@ -24,7 +25,7 @@ interface Goal {
   };
 }
 
-const PERIOD_LABEL: Record<Goal['period'], string> = { MONTH: 'Місяць', QUARTER: 'Квартал', YEAR: 'Рік' };
+const PERIOD_KEY: Record<Goal['period'], string> = { MONTH: 'goals.month', QUARTER: 'goals.quarter', YEAR: 'goals.year' };
 
 function startOfPeriod(period: Goal['period'], now = new Date()): Date {
   const d = new Date(now);
@@ -50,6 +51,7 @@ const toDateInput = (d: Date) => d.toISOString().split('T')[0];
 
 export default function GoalsPage() {
   const { user } = useAuthStore();
+  const t = useT();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -161,19 +163,19 @@ export default function GoalsPage() {
     <div className="p-4 sm:p-6 space-y-5 max-w-5xl mx-auto">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white">Цілі продажів</h1>
-          <p className="text-sm text-gray-400">Плани на місяць, квартал, рік</p>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-white">{t('goals.title')}</h1>
+          <p className="text-sm text-gray-400">{t('goals.subtitle')}</p>
         </div>
         {canEdit && (
           <div className="flex gap-2">
             <button onClick={() => openNew('MONTH')} className="btn-secondary text-sm">
-              <Plus className="w-3.5 h-3.5" /> На місяць
+              <Plus className="w-3.5 h-3.5" /> {t('goals.forMonth')}
             </button>
             <button onClick={() => openNew('QUARTER')} className="btn-secondary text-sm">
-              <Plus className="w-3.5 h-3.5" /> На квартал
+              <Plus className="w-3.5 h-3.5" /> {t('goals.forQuarter')}
             </button>
             <button onClick={() => openNew('YEAR')} className="btn-primary text-sm">
-              <Plus className="w-3.5 h-3.5" /> На рік
+              <Plus className="w-3.5 h-3.5" /> {t('goals.forYear')}
             </button>
           </div>
         )}
@@ -186,13 +188,11 @@ export default function GoalsPage() {
       ) : goals.length === 0 ? (
         <div className="card p-12 text-center">
           <Target className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-          <h3 className="font-semibold text-gray-900 dark:text-white mb-1">Цілей ще немає</h3>
-          <p className="text-sm text-gray-500 mb-5">
-            Поставте план продажів — і відстежуйте прогрес у реальному часі
-          </p>
+          <h3 className="font-semibold text-gray-900 dark:text-white mb-1">{t('goals.empty')}</h3>
+          <p className="text-sm text-gray-500 mb-5">{t('goals.emptyHint')}</p>
           {canEdit && (
             <button onClick={() => openNew('MONTH')} className="btn-primary mx-auto">
-              <Plus className="w-4 h-4" /> Створити першу ціль
+              <Plus className="w-4 h-4" /> {t('goals.createFirst')}
             </button>
           )}
         </div>
@@ -207,7 +207,7 @@ export default function GoalsPage() {
                   </div>
                   <div>
                     <h3 className="font-semibold text-gray-900 dark:text-white">
-                      {PERIOD_LABEL[g.period]}
+                      {t(PERIOD_KEY[g.period])}
                       {!g.active && <span className="ml-2 text-xs text-gray-400">(неактивна)</span>}
                     </h3>
                     <p className="text-xs text-gray-500 flex items-center gap-1">
@@ -276,7 +276,7 @@ export default function GoalsPage() {
                       : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300'
                   }`}
                 >
-                  {PERIOD_LABEL[p]}
+                  {t(PERIOD_KEY[p])}
                 </button>
               ))}
             </div>

@@ -24,10 +24,13 @@ import {
   MessageSquare,
   Palette,
   FileText,
+  Languages,
 } from 'lucide-react';
 import NovaPoshtaSelect from '@/components/nova-poshta/NovaPoshtaSelect';
 import ImageUploader from '@/components/ImageUploader';
 import { useBrandingStore } from '@/stores/brandingStore';
+import { useLocaleStore, useT } from '@/stores/localeStore';
+import { LOCALES, type Locale } from '@/lib/i18n';
 
 interface WebhookToken {
   id: string;
@@ -174,7 +177,8 @@ interface Integration {
 
 export default function SettingsPage() {
   const { user: currentUser } = useAuthStore();
-  const [activeTab, setActiveTab] = useState<'users' | 'webhooks' | 'integrations' | 'branding' | 'templates'>('users');
+  const t = useT();
+  const [activeTab, setActiveTab] = useState<'users' | 'webhooks' | 'integrations' | 'general' | 'templates'>('users');
   const [users, setUsers] = useState<User[]>([]);
   const [webhooks, setWebhooks] = useState<WebhookToken[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
@@ -502,17 +506,17 @@ export default function SettingsPage() {
 
   return (
     <div className="p-4 sm:p-6 space-y-5">
-      <h1 className="text-xl font-bold text-gray-900 dark:text-white">Настройки</h1>
+      <h1 className="text-xl font-bold text-gray-900 dark:text-white">{t('settings.title')}</h1>
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg w-fit overflow-x-auto">
         {([
-          { key: 'users', label: 'Пользователи', icon: Users },
-          { key: 'branding', label: 'Брендинг', icon: Palette },
-          { key: 'templates', label: 'Шаблоны', icon: FileText },
-          { key: 'webhooks', label: 'Webhook API', icon: Webhook },
-          { key: 'integrations', label: 'Интеграции', icon: Bot },
-        ] as const).map(({ key, label, icon: Icon }) => (
+          { key: 'users', tKey: 'settings.tabs.users', icon: Users },
+          { key: 'general', tKey: 'settings.tabs.general', icon: Languages },
+          { key: 'templates', tKey: 'settings.tabs.templates', icon: FileText },
+          { key: 'webhooks', tKey: 'settings.tabs.webhooks', icon: Webhook },
+          { key: 'integrations', tKey: 'settings.tabs.integrations', icon: Bot },
+        ] as const).map(({ key, tKey, icon: Icon }) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
@@ -523,7 +527,7 @@ export default function SettingsPage() {
             }`}
           >
             <Icon className="w-4 h-4" />
-            {label}
+            {t(tKey)}
           </button>
         ))}
       </div>
@@ -600,8 +604,8 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* Branding tab */}
-      {activeTab === 'branding' && <BrandingTab />}
+      {/* General tab — language picker */}
+      {activeTab === 'general' && <GeneralTab />}
 
       {/* Templates tab */}
       {activeTab === 'templates' && <TemplatesTab />}
@@ -1193,111 +1197,42 @@ export default function SettingsPage() {
   );
 }
 
-// ============================== BRANDING TAB ==============================
-function BrandingTab() {
-  const { branding, fetch: fetchBranding, set: setBranding } = useBrandingStore();
-  const [orgName, setOrgName] = useState('');
-  const [logo, setLogo] = useState<string | null>(null);
-  const [color, setColor] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!branding) fetchBranding();
-  }, [branding, fetchBranding]);
-
-  useEffect(() => {
-    if (branding) {
-      setOrgName(branding.name || '');
-      setLogo(branding.logo || null);
-      setColor(branding.primaryColor || '');
-    }
-  }, [branding]);
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      const res = await api.put('/organization', {
-        name: orgName || undefined,
-        logo: logo === '' ? null : logo,
-        primaryColor: color || null,
-      });
-      setBranding({ name: res.data.name, logo: res.data.logo, primaryColor: res.data.primaryColor });
-      toast.success('Брендинг збережено');
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
-      toast.error(msg);
-    }
-    setSaving(false);
-  };
-
-  const PRESETS = ['#2563eb', '#9333ea', '#db2777', '#f59e0b', '#10b981', '#0ea5e9', '#ef4444', '#6366f1'];
+// ============================== GENERAL TAB (language) ==============================
+function GeneralTab() {
+  const t = useT();
+  const { locale, setLocale } = useLocaleStore();
 
   return (
     <div className="space-y-4">
       <div className="card p-5">
-        <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Назва воркспейсу</h3>
-        <input
-          className="input max-w-md"
-          value={orgName}
-          onChange={(e) => setOrgName(e.target.value)}
-          placeholder="Моя компанія"
-          maxLength={80}
-        />
-      </div>
-
-      <div className="card p-5">
-        <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Логотип</h3>
-        <ImageUploader
-          value={logo}
-          onChange={setLogo}
-          maxDim={256}
-          maxBytes={150_000}
-          shape="rounded"
-          hint="PNG/JPG, обрізається до 256×256, ~150KB"
-        />
-      </div>
-
-      <div className="card p-5">
-        <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Основний колір</h3>
-        <div className="flex items-center gap-3 flex-wrap">
-          <input
-            type="color"
-            value={color || '#2563eb'}
-            onChange={(e) => setColor(e.target.value)}
-            className="w-14 h-10 rounded-lg border border-gray-200 dark:border-gray-700 cursor-pointer"
-          />
-          <input
-            className="input w-32 font-mono uppercase"
-            value={color}
-            onChange={(e) => setColor(e.target.value)}
-            placeholder="#2563eb"
-            maxLength={7}
-          />
-          {color && (
-            <button onClick={() => setColor('')} className="text-sm text-gray-400 hover:text-gray-700">
-              Скинути
-            </button>
-          )}
-          <div className="flex gap-1.5 flex-wrap ml-auto">
-            {PRESETS.map((p) => (
-              <button
-                key={p}
-                onClick={() => setColor(p)}
-                style={{ background: p }}
-                className={`w-7 h-7 rounded-md border-2 transition-transform ${color === p ? 'border-gray-900 dark:border-white scale-110' : 'border-transparent hover:scale-105'}`}
-                title={p}
-              />
-            ))}
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-violet-500 flex items-center justify-center">
+            <Languages className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white">{t('settings.language')}</h3>
+            <p className="text-xs text-gray-500">{t('settings.languageHint')}</p>
           </div>
         </div>
-        <p className="text-xs text-gray-400 mt-3">
-          Колір застосовується до всіх кнопок і акцентів. Зміни видно одразу.
-        </p>
-      </div>
 
-      <button onClick={save} disabled={saving} className="btn-primary">
-        {saving ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : 'Зберегти брендинг'}
-      </button>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {LOCALES.map((l) => (
+            <button
+              key={l.code}
+              onClick={() => setLocale(l.code as Locale)}
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl border-2 transition-all ${
+                locale === l.code
+                  ? 'border-primary-600 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-400'
+                  : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
+              }`}
+            >
+              <span className="text-2xl">{l.flag}</span>
+              <span className="font-medium">{l.label}</span>
+              {locale === l.code && <span className="ml-auto text-primary-600">✓</span>}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

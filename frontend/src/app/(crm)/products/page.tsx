@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import CsvImport from '@/components/CsvImport';
 import ImageUploader from '@/components/ImageUploader';
+import { useT } from '@/stores/localeStore';
 
 interface ProductForm {
   name: string;
@@ -47,6 +48,7 @@ const EMPTY_FORM: ProductForm = {
 
 export default function ProductsPage() {
   const { user } = useAuthStore();
+  const t = useT();
   const [products, setProducts] = useState<Product[]>([]);
   const [pagination, setPagination] = useState<PaginationType>({ total: 0, page: 1, limit: 50, pages: 0 });
   const [loading, setLoading] = useState(true);
@@ -142,17 +144,17 @@ export default function ProductsPage() {
     <div className="p-4 sm:p-6 space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white">Товары</h1>
-          <p className="text-sm text-gray-400">{pagination.total} товаров · Склад: {formatCurrency(totalValue)}</p>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-white">{t('products.title')}</h1>
+          <p className="text-sm text-gray-400">{pagination.total} {t('products.count')} · {t('products.warehouse')}: {formatCurrency(totalValue)}</p>
         </div>
         {canEdit && (
           <div className="flex gap-2">
             <button onClick={() => setImportOpen(true)} className="btn-secondary">
-              <Upload className="w-4 h-4" /> Імпорт CSV
+              <Upload className="w-4 h-4" /> {t('customers.csvImport')}
             </button>
             <button onClick={openCreate} className="btn-primary">
               <Plus className="w-4 h-4" />
-              Добавить товар
+              {t('products.add')}
             </button>
           </div>
         )}
@@ -164,7 +166,7 @@ export default function ProductsPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
             className="input pl-9"
-            placeholder="Поиск по названию или артикулу..."
+            placeholder={t('products.searchPlaceholder')}
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1); }}
           />

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import api from '@/lib/api';
 import { Sparkles, Users, ShoppingCart, Package, Zap } from 'lucide-react';
+import { useT } from '@/stores/localeStore';
 
 interface OrgInfo {
   id: string;
@@ -17,6 +18,7 @@ interface OrgInfo {
 const PLAN_LABEL: Record<string, string> = { FREE: 'Free', PRO: 'Pro', BUSINESS: 'Business' };
 
 export default function PlanUsage({ compact = false }: { compact?: boolean }) {
+  const t = useT();
   const [info, setInfo] = useState<OrgInfo | null>(null);
 
   useEffect(() => {
@@ -26,9 +28,9 @@ export default function PlanUsage({ compact = false }: { compact?: boolean }) {
   if (!info) return null;
 
   const items = [
-    { icon: Users, label: 'Користувачів', used: info.usage.users, max: info.maxUsers, color: 'blue' },
-    { icon: ShoppingCart, label: 'Замовлень / місяць', used: info.usage.ordersThisMonth, max: info.maxOrders, color: 'violet' },
-    { icon: Package, label: 'Товарів', used: info.usage.products, max: info.maxProducts, color: 'amber' },
+    { icon: Users, label: t('plan.users'), used: info.usage.users, max: info.maxUsers, color: 'blue' },
+    { icon: ShoppingCart, label: t('plan.ordersMonth'), used: info.usage.ordersThisMonth, max: info.maxOrders, color: 'violet' },
+    { icon: Package, label: t('plan.products'), used: info.usage.products, max: info.maxProducts, color: 'amber' },
   ];
 
   if (compact) {
@@ -48,15 +50,15 @@ export default function PlanUsage({ compact = false }: { compact?: boolean }) {
           </div>
           <div>
             <h3 className="font-semibold text-gray-900 dark:text-white">{info.name}</h3>
-            <p className="text-xs text-gray-500">Тариф: <span className="font-medium">{PLAN_LABEL[info.plan]}</span></p>
+            <p className="text-xs text-gray-500">{t('plan.tariff')}: <span className="font-medium">{PLAN_LABEL[info.plan]}</span></p>
           </div>
         </div>
         {info.plan === 'FREE' && (
           <a
-            href="mailto:sales@crm.com?subject=Хочу%20оновити%20тариф"
+            href="mailto:sales@crm.com?subject=Upgrade%20plan"
             className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gradient-to-r from-blue-600 to-fuchsia-600 text-white hover:opacity-90 transition-opacity"
           >
-            <Zap className="w-3.5 h-3.5" /> Оновити
+            <Zap className="w-3.5 h-3.5" /> {t('plan.upgrade')}
           </a>
         )}
       </div>

@@ -14,6 +14,7 @@ import type { Order, OrderStatus, Pagination as PaginationType, User } from '@/t
 import { ORDER_STATUS_LABELS, ORDER_SOURCE_LABELS } from '@/types';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '@/stores/authStore';
+import { useT } from '@/stores/localeStore';
 import {
   Plus,
   Search,
@@ -48,6 +49,7 @@ export default function OrdersPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuthStore();
+  const t = useT();
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [pagination, setPagination] = useState<PaginationType>({ total: 0, page: 1, limit: 20, pages: 0 });
@@ -261,8 +263,8 @@ export default function OrdersPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center gap-3">
         <div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white">Заказы</h1>
-          <p className="text-sm text-gray-400">{pagination.total} заказов</p>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-white">{t('orders.title')}</h1>
+          <p className="text-sm text-gray-400">{pagination.total} {t('orders.count')}</p>
         </div>
         <div className="ml-auto flex items-center gap-2 flex-wrap">
           {/* View toggle */}
@@ -283,13 +285,13 @@ export default function OrdersPage() {
 
           <button onClick={handleExport} className="btn-secondary">
             <Download className="w-4 h-4" />
-            <span className="hidden sm:inline">Экспорт</span>
+            <span className="hidden sm:inline">{t('common.export')}</span>
           </button>
 
           {canEdit && (
             <button onClick={() => setCreateModal(true)} className="btn-primary">
               <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">Новый заказ</span>
+              <span className="hidden sm:inline">{t('orders.new')}</span>
             </button>
           )}
         </div>
@@ -310,7 +312,7 @@ export default function OrdersPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               className="input pl-9"
-              placeholder="Поиск по имени или телефону..."
+              placeholder={t('orders.searchPlaceholder')}
               value={search}
               onChange={(e) => handleSearchChange(e.target.value)}
             />
@@ -321,7 +323,7 @@ export default function OrdersPage() {
             value={status}
             onChange={(e) => { setStatus(e.target.value); setPage(1); }}
           >
-            <option value="">Все статусы</option>
+            <option value="">{t('orders.allStatuses')}</option>
             {STATUSES.map((s) => (
               <option key={s} value={s}>{ORDER_STATUS_LABELS[s]}</option>
             ))}
@@ -332,7 +334,7 @@ export default function OrdersPage() {
             value={managerId}
             onChange={(e) => { setManagerId(e.target.value); setPage(1); }}
           >
-            <option value="">Все менеджеры</option>
+            <option value="">{t('orders.allManagers')}</option>
             {managers.map((m) => (
               <option key={m.id} value={m.id}>{m.name}</option>
             ))}

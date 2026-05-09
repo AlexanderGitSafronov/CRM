@@ -7,7 +7,6 @@ import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
 import SearchPalette from '@/components/SearchPalette';
 import { CelebrationListener } from '@/components/CelebrationListener';
-import { BrandingApplier } from '@/components/BrandingApplier';
 import { WelcomeTour } from '@/components/WelcomeTour';
 import api from '@/lib/api';
 
@@ -155,7 +154,6 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
 
       <SearchPalette />
       <CelebrationListener />
-      <BrandingApplier />
       <WelcomeTour />
     </div>
   );

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/stores/authStore';
-import { useBrandingStore } from '@/stores/brandingStore';
+import { useT } from '@/stores/localeStore';
 import { cn } from '@/lib/utils';
 import {
   BarChart3,
@@ -22,22 +22,22 @@ import {
 
 interface NavItem {
   href: string;
-  label: string;
+  labelKey: string;
   icon: React.ComponentType<{ className?: string }>;
   roles?: string[];
   badge?: number;
 }
 
 const navItems: NavItem[] = [
-  { href: '/dashboard', label: 'Дашборд', icon: BarChart3 },
-  { href: '/orders', label: 'Заказы', icon: ShoppingCart },
-  { href: '/customers', label: 'Клиенты', icon: Users },
-  { href: '/products', label: 'Товары', icon: Package },
-  { href: '/analytics', label: 'Аналитика', icon: TrendingUp, roles: ['ADMIN', 'MANAGER'] },
-  { href: '/goals', label: 'Цели', icon: Target, roles: ['ADMIN', 'MANAGER'] },
-  { href: '/analytics/cc-payroll', label: 'Зарплата КЦ', icon: Wallet, roles: ['ADMIN'] },
-  { href: '/notifications', label: 'Уведомления', icon: Bell },
-  { href: '/settings', label: 'Настройки', icon: Settings, roles: ['ADMIN'] },
+  { href: '/dashboard', labelKey: 'nav.dashboard', icon: BarChart3 },
+  { href: '/orders', labelKey: 'nav.orders', icon: ShoppingCart },
+  { href: '/customers', labelKey: 'nav.customers', icon: Users },
+  { href: '/products', labelKey: 'nav.products', icon: Package },
+  { href: '/analytics', labelKey: 'nav.analytics', icon: TrendingUp, roles: ['ADMIN', 'MANAGER'] },
+  { href: '/goals', labelKey: 'nav.goals', icon: Target, roles: ['ADMIN', 'MANAGER'] },
+  { href: '/analytics/cc-payroll', labelKey: 'nav.payroll', icon: Wallet, roles: ['ADMIN'] },
+  { href: '/notifications', labelKey: 'nav.notifications', icon: Bell },
+  { href: '/settings', labelKey: 'nav.settings', icon: Settings, roles: ['ADMIN'] },
 ];
 
 interface SidebarProps {
@@ -49,7 +49,7 @@ interface SidebarProps {
 export default function Sidebar({ open, onClose, unreadNotifications = 0 }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
-  const { branding } = useBrandingStore();
+  const t = useT();
 
   const filteredItems = navItems.filter(
     (item) => !item.roles || (user && item.roles.includes(user.role))
@@ -76,16 +76,11 @@ export default function Sidebar({ open, onClose, unreadNotifications = 0 }: Side
         {/* Logo */}
         <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-800">
           <Link href="/dashboard" className="flex items-center gap-2.5 min-w-0">
-            {branding?.logo ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={branding.logo} alt="" className="w-8 h-8 rounded-lg object-cover shrink-0" />
-            ) : (
-              <div className="w-8 h-8 rounded-lg bg-primary-600 flex items-center justify-center shrink-0">
-                <Zap className="w-4 h-4 text-white" />
-              </div>
-            )}
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 via-violet-500 to-fuchsia-500 flex items-center justify-center shrink-0 shadow-sm">
+              <Zap className="w-4 h-4 text-white" />
+            </div>
             <span className="font-bold text-lg text-gray-900 dark:text-white truncate">
-              {branding?.name || 'CRM Pro'}
+              CRM Pro
             </span>
           </Link>
           <button
@@ -120,7 +115,7 @@ export default function Sidebar({ open, onClose, unreadNotifications = 0 }: Side
                 className={cn('sidebar-link', isActive && 'active')}
               >
                 <Icon className="w-4.5 h-4.5 shrink-0" />
-                <span className="flex-1">{item.label}</span>
+                <span className="flex-1">{t(item.labelKey)}</span>
                 {badge > 0 && (
                   <span className="bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 min-w-[20px] text-center leading-none">
                     {badge > 99 ? '99+' : badge}
@@ -144,13 +139,7 @@ export default function Sidebar({ open, onClose, unreadNotifications = 0 }: Side
                 {user?.name}
               </p>
               <p className="text-xs text-gray-400 truncate">
-                {user?.role === 'ADMIN'
-                  ? 'Администратор'
-                  : user?.role === 'MANAGER'
-                  ? 'Менеджер'
-                  : user?.role === 'CALL_CENTER'
-                  ? 'Колл-центр'
-                  : 'Просмотр'}
+                {t(`role.${user?.role}`)}
               </p>
             </div>
           </div>
@@ -159,7 +148,7 @@ export default function Sidebar({ open, onClose, unreadNotifications = 0 }: Side
             className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-gray-500 dark:text-gray-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors"
           >
             <LogOut className="w-4 h-4" />
-            Выйти
+            {t('nav.logout')}
           </button>
         </div>
       </aside>

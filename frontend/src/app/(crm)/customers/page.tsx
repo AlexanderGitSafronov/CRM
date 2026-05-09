@@ -8,8 +8,10 @@ import Pagination from '@/components/ui/Pagination';
 import type { Customer, Pagination as PaginationType } from '@/types';
 import { Search, Users, Phone, Mail, MapPin, TrendingUp, RefreshCw, X, ShieldAlert, Upload } from 'lucide-react';
 import CsvImport from '@/components/CsvImport';
+import { useT } from '@/stores/localeStore';
 
 export default function CustomersPage() {
+  const t = useT();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [pagination, setPagination] = useState<PaginationType>({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
@@ -45,11 +47,11 @@ export default function CustomersPage() {
     <div className="p-4 sm:p-6 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white">Клиенты</h1>
-          <p className="text-sm text-gray-400">{pagination.total} клиентов</p>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-white">{t('customers.title')}</h1>
+          <p className="text-sm text-gray-400">{pagination.total} {t('customers.count')}</p>
         </div>
         <button onClick={() => setImportOpen(true)} className="btn-secondary">
-          <Upload className="w-4 h-4" /> Імпорт CSV
+          <Upload className="w-4 h-4" /> {t('customers.csvImport')}
         </button>
       </div>
       <CsvImport open={importOpen} onClose={() => setImportOpen(false)} endpoint="/import/customers" onSuccess={fetchCustomers} />
@@ -59,7 +61,7 @@ export default function CustomersPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
             className="input pl-9"
-            placeholder="Поиск по имени, телефону, email..."
+            placeholder={t('customers.searchPlaceholder')}
             value={search}
             onChange={(e) => handleSearch(e.target.value)}
           />

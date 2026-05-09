@@ -32,6 +32,7 @@ import {
   Bar,
 } from 'recharts';
 import { useAuthStore } from '@/stores/authStore';
+import { useT } from '@/stores/localeStore';
 import PlanUsage from '@/components/PlanUsage';
 import Sparkline from '@/components/Sparkline';
 import SlaBadge from '@/components/SlaBadge';
@@ -62,6 +63,7 @@ interface Kpi {
 
 export default function DashboardPage() {
   const { user } = useAuthStore();
+  const t = useT();
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [kpi, setKpi] = useState<Kpi | null>(null);
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
@@ -113,28 +115,28 @@ export default function DashboardPage() {
 
   const stats = [
     {
-      title: 'Всего заказов',
+      title: t('dashboard.totalOrders'),
       value: analytics?.orders.total ?? 0,
-      sub: `${analytics?.orders.new ?? 0} новых`,
+      sub: `${analytics?.orders.new ?? 0} ${t('dashboard.newOrders')}`,
       icon: ShoppingCart,
       color: 'text-blue-600 dark:text-blue-400',
       bg: 'bg-blue-50 dark:bg-blue-900/20',
       href: '/orders',
     },
     {
-      title: 'Выручка',
+      title: t('dashboard.revenue'),
       value: formatCurrency(analytics?.revenue ?? 0),
-      sub: `Расходы: ${formatCurrency(analytics?.expenses ?? 0)}`,
+      sub: `${t('dashboard.expenses')}: ${formatCurrency(analytics?.expenses ?? 0)}`,
       icon: TrendingUp,
       color: 'text-green-600 dark:text-green-400',
       bg: 'bg-green-50 dark:bg-green-900/20',
       href: '/analytics',
     },
     {
-      title: 'Прибыль',
+      title: t('dashboard.profit'),
       value: formatCurrency(analytics?.profit ?? 0),
       sub: analytics && analytics.revenue > 0
-        ? `Маржа ${((analytics.profit / analytics.revenue) * 100).toFixed(1)}%`
+        ? `${t('dashboard.margin')} ${((analytics.profit / analytics.revenue) * 100).toFixed(1)}%`
         : '',
       icon: ArrowUpRight,
       color: 'text-purple-600 dark:text-purple-400',
@@ -142,9 +144,9 @@ export default function DashboardPage() {
       href: '/analytics',
     },
     {
-      title: 'Клиентов',
+      title: t('dashboard.customers'),
       value: analytics?.customers.total ?? 0,
-      sub: `${analytics?.customers.new ?? 0} новых`,
+      sub: `${analytics?.customers.new ?? 0} ${t('dashboard.newOrders')}`,
       icon: Users,
       color: 'text-orange-600 dark:text-orange-400',
       bg: 'bg-orange-50 dark:bg-orange-900/20',
@@ -158,16 +160,16 @@ export default function DashboardPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            Добро пожаловать, {user?.name?.split(' ')[0]}! 👋
+            {t('dashboard.welcome')}, {user?.name?.split(' ')[0]}! 👋
           </h1>
           <p className="text-gray-500 dark:text-gray-400 text-sm mt-0.5">
-            Вот что происходит с вашим бизнесом сегодня
+            {t('dashboard.subtitle')}
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {lastUpdated && (
             <span className="text-xs text-gray-400 hidden sm:block">
-              Обновлено в {lastUpdated.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              {t('dashboard.updatedAt')} {lastUpdated.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
             </span>
           )}
           <button
@@ -176,7 +178,7 @@ export default function DashboardPage() {
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-            Обновить
+            {t('common.refresh')}
           </button>
         </div>
       </div>
@@ -190,7 +192,7 @@ export default function DashboardPage() {
                 <ShoppingCart className="w-4 h-4 text-blue-600 dark:text-blue-400" />
               </div>
               <div>
-                <p className="text-xs text-gray-400">Сегодня заказов</p>
+                <p className="text-xs text-gray-400">{t('dashboard.todayOrders')}</p>
                 <p className="text-xl font-bold text-gray-900 dark:text-white">
                   {kpi.today.orders}
                   <span className="ml-1.5 inline-flex items-center px-1 py-0 rounded bg-emerald-500 text-white text-[9px] font-semibold align-middle animate-pulse">LIVE</span>
@@ -210,9 +212,9 @@ export default function DashboardPage() {
               <Truck className="w-4 h-4 text-orange-600 dark:text-orange-400" />
             </div>
             <div>
-              <p className="text-xs text-gray-400">В пути</p>
+              <p className="text-xs text-gray-400">{t('dashboard.inTransit')}</p>
               <p className="text-xl font-bold text-gray-900 dark:text-white">{kpi.inTransit}</p>
-              <p className="text-xs text-gray-400">посылок</p>
+              <p className="text-xs text-gray-400">{t('dashboard.parcels')}</p>
             </div>
           </div>
 
@@ -221,7 +223,7 @@ export default function DashboardPage() {
               <PercentCircle className={`w-4 h-4 ${kpi.redemptionRate !== null && kpi.redemptionRate >= 70 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`} />
             </div>
             <div>
-              <p className="text-xs text-gray-400">Выкуп (30д)</p>
+              <p className="text-xs text-gray-400">{t('dashboard.redemption')}</p>
               <p className="text-xl font-bold text-gray-900 dark:text-white">
                 {kpi.redemptionRate !== null ? `${kpi.redemptionRate}%` : '—'}
               </p>
