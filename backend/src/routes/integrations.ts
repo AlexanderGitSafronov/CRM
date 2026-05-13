@@ -9,17 +9,28 @@ const router = Router();
 
 router.use(authenticate, requireRole('ADMIN'));
 
+/**
+ * Маска секрета — строка из `•` той же длины что и оригинал.
+ * UI ставит её в input как value: пользователь видит реальное колво
+ * символов своего ключа, при этом не раскрывает его содержимое.
+ * При сохранении бэк отличает «голую маску» от настоящего нового значения
+ * и не затирает реальный ключ (см. MASKED_RE в PUT).
+ */
+const SENSITIVE_KEYS = ['botToken', 'token', 'secret', 'apiKey', 'password', 'accessToken'];
+function maskValue(v: string): string {
+  return '•'.repeat(Math.min(v.length, 200));
+}
+
 router.get('/', async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const integrations = await prisma.integration.findMany({ where: { organizationId: orgId } });
   const masked = integrations.map((integration) => {
     try {
       const config = JSON.parse(integration.config) as Record<string, unknown>;
-      const SENSITIVE_KEYS = ['botToken', 'token', 'secret', 'apiKey', 'password', 'accessToken'];
       const maskedConfig: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(config)) {
         if (SENSITIVE_KEYS.some((k) => key.toLowerCase().includes(k.toLowerCase())) && typeof value === 'string' && value) {
-          maskedConfig[key] = value.slice(0, 4) + '****' + value.slice(-4);
+          maskedConfig[key] = maskValue(value);
         } else {
           maskedConfig[key] = value;
         }
@@ -32,10 +43,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   return res.json(masked);
 });
 
-// Сигнатура маскированного значения из GET /integrations: `aaaa****bbbb`.
-// Если UI прислал такое значение — значит юзер просто round-trip'нул маску,
-// настоящего ключа он не вводил → сохраняем существующий.
-const MASKED_RE = /\*{3,}/;
+// Сигнатура маскированного значения: либо чистая bullet-строка `•••••…`,
+// либо легаси `aaaa****bbbb`. В обоих случаях НЕ затираем реальный ключ.
+// • = BULLET, · = MIDDLE DOT (на всякий случай).
+const MASKED_RE = /^[•·]+$|\*{3,}/;
 
 router.put('/:type', async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
