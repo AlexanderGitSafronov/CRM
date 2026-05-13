@@ -178,7 +178,33 @@ interface Integration {
 export default function SettingsPage() {
   const { user: currentUser } = useAuthStore();
   const t = useT();
-  const [activeTab, setActiveTab] = useState<'users' | 'webhooks' | 'integrations' | 'general' | 'templates'>('users');
+  const VALID_TABS = ['users', 'webhooks', 'integrations', 'general', 'templates'] as const;
+  type TabId = (typeof VALID_TABS)[number];
+  const [activeTab, setActiveTab] = useState<TabId>(() => {
+    if (typeof window === 'undefined') return 'users';
+    const h = window.location.hash.replace('#', '');
+    return (VALID_TABS as readonly string[]).includes(h) ? (h as TabId) : 'users';
+  });
+
+  // Синхронизируем активный таб с URL hash — выживает перезагрузку и share по ссылке.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const cur = window.location.hash.replace('#', '');
+    if (cur !== activeTab) {
+      window.history.replaceState(null, '', `#${activeTab}`);
+    }
+  }, [activeTab]);
+
+  // Back/forward → меняем таб
+  useEffect(() => {
+    function onHash() {
+      const h = window.location.hash.replace('#', '');
+      if ((VALID_TABS as readonly string[]).includes(h)) setActiveTab(h as TabId);
+    }
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [users, setUsers] = useState<User[]>([]);
   const [webhooks, setWebhooks] = useState<WebhookToken[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
@@ -221,6 +247,8 @@ export default function SettingsPage() {
   });
   const [savingAdtrack, setSavingAdtrack] = useState(false);
   const [testingAdtrack, setTestingAdtrack] = useState(false);
+  // true → секрет уже лежит в БД (показываем плейсхолдер вместо маски в инпуте)
+  const [adtrackSecretSaved, setAdtrackSecretSaved] = useState(false);
 
   // NP Tracker status
   interface TrackerStatus {
@@ -320,12 +348,17 @@ export default function SettingsPage() {
         const adt = ints.find((i) => i.type === 'ADTRACK');
         if (adt) {
           const cfg = JSON.parse(adt.config);
+          const rawSecret = (cfg.webhookSecret || '') as string;
+          // GET /integrations маскирует secret как aaaa****bbbb. Не показываем маску
+          // в input (она вводит в заблуждение про длину). Помечаем флагом secretSet.
+          const isMasked = /\*{3,}/.test(rawSecret);
           setAdtrackConfig({
             trackingId: cfg.trackingId || '',
-            webhookSecret: cfg.webhookSecret || '',
+            webhookSecret: isMasked ? '' : rawSecret,
             baseUrl: cfg.baseUrl || 'https://adtrack-backend.vercel.app',
             active: adt.active,
           });
+          setAdtrackSecretSaved(isMasked || !!rawSecret);
         }
       } catch {}
       setLoading(false);
@@ -511,17 +544,30 @@ export default function SettingsPage() {
     setTestingTelegram(false);
   };
 
+  // Строит config для PUT: webhookSecret отправляется только если юзер реально его ввёл.
+  // Пустое поле = «не менять», backend оставит существующий ключ.
+  const buildAdtrackConfig = () => {
+    const cfg: Record<string, string> = {
+      trackingId: adtrackConfig.trackingId.trim(),
+      baseUrl: adtrackConfig.baseUrl.trim() || 'https://adtrack-backend.vercel.app',
+    };
+    const s = adtrackConfig.webhookSecret.trim();
+    if (s) cfg.webhookSecret = s;
+    return cfg;
+  };
+
   const handleSaveAdtrack = async () => {
     setSavingAdtrack(true);
     try {
       await api.put('/integrations/ADTRACK', {
-        config: {
-          trackingId: adtrackConfig.trackingId.trim(),
-          webhookSecret: adtrackConfig.webhookSecret.trim(),
-          baseUrl: adtrackConfig.baseUrl.trim() || 'https://adtrack-backend.vercel.app',
-        },
+        config: buildAdtrackConfig(),
         active: adtrackConfig.active,
       });
+      // Если юзер ввёл новый секрет — очищаем поле и помечаем как «збережено».
+      if (adtrackConfig.webhookSecret.trim()) {
+        setAdtrackConfig((p) => ({ ...p, webhookSecret: '' }));
+        setAdtrackSecretSaved(true);
+      }
       toast.success('AdTrack збережено');
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
@@ -540,16 +586,11 @@ export default function SettingsPage() {
     setAdtrackConfig((p) => ({ ...p, active: next }));
     try {
       await api.put('/integrations/ADTRACK', {
-        config: {
-          trackingId: adtrackConfig.trackingId.trim(),
-          webhookSecret: adtrackConfig.webhookSecret.trim(),
-          baseUrl: adtrackConfig.baseUrl.trim() || 'https://adtrack-backend.vercel.app',
-        },
+        config: buildAdtrackConfig(),
         active: next,
       });
       toast.success(next ? 'AdTrack увімкнено' : 'AdTrack вимкнено');
     } catch (err: unknown) {
-      // revert
       setAdtrackConfig((p) => ({ ...p, active: !next }));
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
       toast.error(msg);
@@ -1094,9 +1135,9 @@ export default function SettingsPage() {
               <div>
                 <label className="label">
                   Webhook secret
-                  {/\*{3,}/.test(adtrackConfig.webhookSecret) && (
-                    <span className="ml-2 text-xs text-gray-400">
-                      (вже збережено — залиште як є, щоб не міняти)
+                  {adtrackSecretSaved && !adtrackConfig.webhookSecret && (
+                    <span className="ml-2 text-xs text-emerald-500">
+                      ✓ збережено
                     </span>
                   )}
                 </label>
@@ -1105,7 +1146,9 @@ export default function SettingsPage() {
                   type="password"
                   value={adtrackConfig.webhookSecret}
                   onChange={(e) => setAdtrackConfig((p) => ({ ...p, webhookSecret: e.target.value }))}
-                  placeholder="secret з AdTrack → Project → CRM webhook"
+                  placeholder={adtrackSecretSaved
+                    ? 'Введіть новий, щоб змінити (інакше залишиться поточний)'
+                    : 'secret з AdTrack → Project → CRM webhook'}
                 />
                 <p className="text-xs text-gray-400 mt-1">
                   Видно в AdTrack: Проект → секція «CRM webhook» → кнопка «Показати secret»
