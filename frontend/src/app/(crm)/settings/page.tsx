@@ -247,8 +247,9 @@ export default function SettingsPage() {
   });
   const [savingAdtrack, setSavingAdtrack] = useState(false);
   const [testingAdtrack, setTestingAdtrack] = useState(false);
-  // true → секрет уже лежит в БД (показываем плейсхолдер вместо маски в инпуте)
-  const [adtrackSecretSaved, setAdtrackSecretSaved] = useState(false);
+  // Маска секрета (aaaa****bbbb) для визуального preview когда ключ уже в БД.
+  // null = ключа в БД нет, юзер должен ввести.
+  const [adtrackSecretMask, setAdtrackSecretMask] = useState<string | null>(null);
 
   // NP Tracker status
   interface TrackerStatus {
@@ -349,16 +350,16 @@ export default function SettingsPage() {
         if (adt) {
           const cfg = JSON.parse(adt.config);
           const rawSecret = (cfg.webhookSecret || '') as string;
-          // GET /integrations маскирует secret как aaaa****bbbb. Не показываем маску
-          // в input (она вводит в заблуждение про длину). Помечаем флагом secretSet.
           const isMasked = /\*{3,}/.test(rawSecret);
           setAdtrackConfig({
             trackingId: cfg.trackingId || '',
-            webhookSecret: isMasked ? '' : rawSecret,
+            webhookSecret: '',
             baseUrl: cfg.baseUrl || 'https://adtrack-backend.vercel.app',
             active: adt.active,
           });
-          setAdtrackSecretSaved(isMasked || !!rawSecret);
+          // Если secret в БД — показываем маску как readonly preview.
+          // Если БД отдала немаскированный (пустой/новый) — пустая маска.
+          setAdtrackSecretMask(isMasked ? rawSecret : rawSecret ? rawSecret.slice(0, 4) + '****' + rawSecret.slice(-4) : null);
         }
       } catch {}
       setLoading(false);
@@ -563,10 +564,11 @@ export default function SettingsPage() {
         config: buildAdtrackConfig(),
         active: adtrackConfig.active,
       });
-      // Если юзер ввёл новый секрет — очищаем поле и помечаем как «збережено».
-      if (adtrackConfig.webhookSecret.trim()) {
+      // Если юзер ввёл новый секрет — очищаем поле и обновляем preview-маску.
+      const s = adtrackConfig.webhookSecret.trim();
+      if (s) {
         setAdtrackConfig((p) => ({ ...p, webhookSecret: '' }));
-        setAdtrackSecretSaved(true);
+        setAdtrackSecretMask(s.slice(0, 4) + '****' + s.slice(-4));
       }
       toast.success('AdTrack збережено');
     } catch (err: unknown) {
@@ -1133,21 +1135,24 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="label">
-                  Webhook secret
-                  {adtrackSecretSaved && !adtrackConfig.webhookSecret && (
-                    <span className="ml-2 text-xs text-emerald-500">
-                      ✓ збережено
-                    </span>
-                  )}
-                </label>
+                <label className="label">Webhook secret</label>
+                {adtrackSecretMask && (
+                  <div className="mb-2 flex items-center justify-between gap-2 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="text-emerald-500">✓</span>
+                      <span className="text-gray-500 dark:text-gray-400">Поточний:</span>
+                      <code className="font-mono text-gray-700 dark:text-gray-200">{adtrackSecretMask}</code>
+                    </div>
+                    <span className="text-xs text-gray-400">збережено</span>
+                  </div>
+                )}
                 <input
                   className="input font-mono text-sm"
                   type="password"
                   value={adtrackConfig.webhookSecret}
                   onChange={(e) => setAdtrackConfig((p) => ({ ...p, webhookSecret: e.target.value }))}
-                  placeholder={adtrackSecretSaved
-                    ? 'Введіть новий, щоб змінити (інакше залишиться поточний)'
+                  placeholder={adtrackSecretMask
+                    ? 'Введіть новий, щоб замінити (порожнє = залишити поточний)'
                     : 'secret з AdTrack → Project → CRM webhook'}
                 />
                 <p className="text-xs text-gray-400 mt-1">
