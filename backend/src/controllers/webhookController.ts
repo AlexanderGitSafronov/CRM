@@ -5,7 +5,18 @@ import { notifyNewOrder, logActivity } from '../services/notifications';
 import { broadcastEvent } from '../services/eventBus';
 import { getNextManagerId } from '../services/roundRobin';
 import { checkAchievements } from '../services/achievements';
+import { sendOrderStatusToAdtrack } from '../services/adtrackWebhook';
 import { AuthRequest } from '../middleware/auth';
+
+/**
+ * Безопасно извлекает строковое значение из nested-объекта payload.
+ * Принимает `null`, числа, пустые строки — отбрасывает их.
+ */
+function pickStr(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  return t.length > 0 && t.length <= 500 ? t : null;
+}
 
 // Public webhook endpoint — token determines which org the order belongs to
 export const receiveOrder = async (req: Request, res: Response) => {
@@ -28,7 +39,21 @@ export const receiveOrder = async (req: Request, res: Response) => {
 
   const orgId = webhookToken.organizationId;
 
-  const { customer, items, source = 'WEBHOOK', comment, delivery } = req.body;
+  const {
+    customer,
+    items,
+    source = 'WEBHOOK',
+    comment,
+    delivery,
+    attribution: rawAttribution,
+  } = req.body as {
+    customer?: { name?: string; phone?: string; email?: string; city?: string; address?: string };
+    items?: Array<{ name: string; quantity: number; price: number; productId?: string }>;
+    source?: string;
+    comment?: string;
+    delivery?: { service?: string; city?: string; address?: string; recipientName?: string };
+    attribution?: Record<string, unknown>;
+  };
 
   if (!customer?.name || !customer?.phone) {
     return res.status(400).json({ error: 'customer.name and customer.phone required' });
@@ -37,6 +62,29 @@ export const receiveOrder = async (req: Request, res: Response) => {
   if (!items?.length) {
     return res.status(400).json({ error: 'items array required' });
   }
+
+  // Захват атрибуции (fbclid/utm/...) — приходит из Magaz/лендингов через AdTrack tracker.js cookie.
+  // Все поля опциональные: если ничего не передано — заказ создаётся без них, AdTrack просто не свяжет
+  // его с креативом, но интеграция всё равно работает.
+  const attribution = rawAttribution ?? {};
+  const utmSource = pickStr(attribution.utmSource ?? attribution.utm_source);
+  const utmMedium = pickStr(attribution.utmMedium ?? attribution.utm_medium);
+  const utmCampaign = pickStr(attribution.utmCampaign ?? attribution.utm_campaign);
+  const utmContent = pickStr(attribution.utmContent ?? attribution.utm_content);
+  const utmTerm = pickStr(attribution.utmTerm ?? attribution.utm_term);
+  const fbclid = pickStr(attribution.fbclid);
+  const ttclid = pickStr(attribution.ttclid);
+  const gclid = pickStr(attribution.gclid);
+
+  // IP/UA можно прокинуть с фронта (например лендинг → сервер → сюда), либо взять из самого запроса
+  // (но это будет IP того кто шлёт вебхук, не IP клиента). Поэтому приоритет — body.customer.ip/userAgent.
+  const customerIp =
+    pickStr((customer as { ip?: string }).ip) ?? pickStr(attribution.ip as string) ?? req.ip ?? null;
+  const customerUserAgent =
+    pickStr((customer as { userAgent?: string }).userAgent) ??
+    pickStr(attribution.userAgent as string) ??
+    pickStr(req.headers['user-agent']) ??
+    null;
 
   let dbCustomer = await prisma.customer.findUnique({
     where: { organizationId_phone: { organizationId: orgId, phone: customer.phone.trim() } },
@@ -86,6 +134,16 @@ export const receiveOrder = async (req: Request, res: Response) => {
       deliveryCity: delivery?.city?.trim() || null,
       deliveryAddress: delivery?.address?.trim() || null,
       recipientName: delivery?.recipientName?.trim() || null,
+      utmSource,
+      utmMedium,
+      utmCampaign,
+      utmContent,
+      utmTerm,
+      fbclid,
+      ttclid,
+      gclid,
+      customerIp,
+      customerUserAgent,
       items: {
         create: items.map((item: {
           name: string;
@@ -131,6 +189,23 @@ export const receiveOrder = async (req: Request, res: Response) => {
   });
 
   void checkAchievements(orgId);
+
+  // AdTrack: новый заказ = Lead. Если интеграция не настроена — silent skip.
+  void sendOrderStatusToAdtrack({
+    organizationId: orgId,
+    orderId: order.id,
+    externalId: order.id,
+    orderNum: order.orderNum,
+    status: 'NEW',
+    amount: order.total,
+    customer: {
+      email: dbCustomer.email,
+      phone: dbCustomer.phone,
+      ip: customerIp,
+      userAgent: customerUserAgent,
+    },
+    attribution: { fbclid, ttclid, gclid, utmSource, utmMedium, utmCampaign, utmContent, utmTerm },
+  });
 
   return res.status(201).json({
     success: true,

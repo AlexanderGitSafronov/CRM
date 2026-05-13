@@ -37,9 +37,11 @@ const PORT = process.env.PORT || 3001;
 
 app.set('trust proxy', 1);
 
-const logsDir = path.join(process.cwd(), 'logs');
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
+if (!process.env.VERCEL) {
+  const logsDir = path.join(process.cwd(), 'logs');
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
 }
 
 app.use(helmet({
@@ -176,18 +178,24 @@ async function bootstrapDefaultOrg() {
   }
 }
 
-app.listen(PORT, async () => {
-  logger.info(`🚀 CRM Backend running on http://localhost:${PORT}`);
-  logger.info(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-  try {
-    await bootstrapDefaultOrg();
-  } catch (e) {
-    logger.error('Bootstrap error (non-fatal):', e);
-  }
-  startNpTracker();
-  startSlaTracker();
-  startCallbackReminder();
-  startLowStockWatcher();
-});
+// In a long-running host (Railway, local dev) we listen and start workers.
+// On Vercel serverless the same module is imported by api/index.ts which wraps
+// `app` with serverless-http; we must NOT call listen() there, and node-cron
+// workers/SSE/bootstrap don't make sense in per-request lambdas.
+if (!process.env.VERCEL) {
+  app.listen(PORT, async () => {
+    logger.info(`🚀 CRM Backend running on http://localhost:${PORT}`);
+    logger.info(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+    try {
+      await bootstrapDefaultOrg();
+    } catch (e) {
+      logger.error('Bootstrap error (non-fatal):', e);
+    }
+    startNpTracker();
+    startSlaTracker();
+    startCallbackReminder();
+    startLowStockWatcher();
+  });
+}
 
 export default app;

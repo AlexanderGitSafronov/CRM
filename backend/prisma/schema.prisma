@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
@@ -196,6 +197,23 @@ model Order {
   npWarehouseRef  String?
   trackingNumber  String?
   cancelReason    String?
+
+  // Attribution для AdTrack (приходит из Magaz/лендинга с заказом)
+  utmSource         String?
+  utmMedium         String?
+  utmCampaign       String?
+  utmContent        String?
+  utmTerm           String?
+  fbclid            String?
+  ttclid            String?
+  gclid             String?
+  customerIp        String?
+  customerUserAgent String?
+
+  // Маркеры доставки в AdTrack для дедупликации/идемпотентности
+  adtrackLastStatus    String?
+  adtrackLastSentAt    DateTime?
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

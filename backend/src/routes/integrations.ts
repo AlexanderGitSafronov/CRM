@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import prisma from '../services/prisma';
 import { sendTelegramMessage } from '../services/telegram';
 import { sendSmsToCustomer, type TurboSmsChannel } from '../services/turbosms';
+import { testAdtrackConnection } from '../services/adtrackWebhook';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 
 const router = Router();
@@ -72,6 +73,22 @@ router.post('/turbosms/test', async (req: AuthRequest, res: Response) => {
   );
   if (ok) return res.json({ success: true, message: 'Повідомлення надіслано' });
   return res.status(400).json({ success: false, error: 'Не вдалось надіслати. Перевірте токен та ім\'я відправника.' });
+});
+
+router.post('/adtrack/test', async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const { trackingId, webhookSecret, baseUrl } = (req.body ?? {}) as {
+    trackingId?: string;
+    webhookSecret?: string;
+    baseUrl?: string;
+  };
+  // Если в body есть креды — тестируем их напрямую (без сохранения).
+  // Если пусто — fallback на сохранённую интеграцию.
+  const inline =
+    trackingId && webhookSecret ? { trackingId, webhookSecret, baseUrl } : undefined;
+  const result = await testAdtrackConnection(orgId, inline);
+  if (result.ok) return res.json({ success: true, message: 'AdTrack reachable, credentials valid' });
+  return res.status(400).json({ success: false, error: result.error });
 });
 
 export default router;

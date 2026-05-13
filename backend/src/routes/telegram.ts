@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../services/prisma';
 import { answerCallbackQuery } from '../services/telegram';
+import { sendOrderStatusByIdToAdtrack } from '../services/adtrackWebhook';
 import { logActivity } from '../services/notifications';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
@@ -48,6 +49,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
         data: { orderId, action: 'STATUS_CHANGED', oldValue: order.status, newValue: 'CONFIRMED' },
       });
       await answerCallbackQuery(cfg.botToken, callbackQueryId, `✅ Замовлення #${order.orderNum} підтверджено`);
+      void sendOrderStatusByIdToAdtrack(orderId, 'CONFIRMED');
       await logActivity({
         organizationId: order.organizationId,
         action: 'TG_CONFIRMED', entityType: 'Order', entityId: orderId,
@@ -62,6 +64,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
         data: { orderId, action: 'STATUS_CHANGED', oldValue: order.status, newValue: 'CANCELLED' },
       });
       await answerCallbackQuery(cfg.botToken, callbackQueryId, `❌ Замовлення #${order.orderNum} скасовано`);
+      void sendOrderStatusByIdToAdtrack(orderId, 'CANCELLED');
       await logActivity({
         organizationId: order.organizationId,
         action: 'TG_CANCELLED', entityType: 'Order', entityId: orderId,

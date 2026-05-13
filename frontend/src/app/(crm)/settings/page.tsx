@@ -212,6 +212,16 @@ export default function SettingsPage() {
   const [savingTelegram, setSavingTelegram] = useState(false);
   const [testingTelegram, setTestingTelegram] = useState(false);
 
+  // AdTrack (optional integration — wires order status to ad platforms via AdTrack)
+  const [adtrackConfig, setAdtrackConfig] = useState({
+    trackingId: '',
+    webhookSecret: '',
+    baseUrl: 'https://adtrack-backend.vercel.app',
+    active: false,
+  });
+  const [savingAdtrack, setSavingAdtrack] = useState(false);
+  const [testingAdtrack, setTestingAdtrack] = useState(false);
+
   // NP Tracker status
   interface TrackerStatus {
     isRunning: boolean;
@@ -305,6 +315,16 @@ export default function SettingsPage() {
             senderRef: cfg.senderRef || '',
             contactSenderRef: cfg.contactSenderRef || '',
             active: np.active,
+          });
+        }
+        const adt = ints.find((i) => i.type === 'ADTRACK');
+        if (adt) {
+          const cfg = JSON.parse(adt.config);
+          setAdtrackConfig({
+            trackingId: cfg.trackingId || '',
+            webhookSecret: cfg.webhookSecret || '',
+            baseUrl: cfg.baseUrl || 'https://adtrack-backend.vercel.app',
+            active: adt.active,
           });
         }
       } catch {}
@@ -489,6 +509,41 @@ export default function SettingsPage() {
       toast.error(msg);
     }
     setTestingTelegram(false);
+  };
+
+  const handleSaveAdtrack = async () => {
+    setSavingAdtrack(true);
+    try {
+      await api.put('/integrations/ADTRACK', {
+        config: {
+          trackingId: adtrackConfig.trackingId.trim(),
+          webhookSecret: adtrackConfig.webhookSecret.trim(),
+          baseUrl: adtrackConfig.baseUrl.trim() || 'https://adtrack-backend.vercel.app',
+        },
+        active: adtrackConfig.active,
+      });
+      toast.success('AdTrack збережено');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+      toast.error(msg);
+    }
+    setSavingAdtrack(false);
+  };
+
+  const handleTestAdtrack = async () => {
+    setTestingAdtrack(true);
+    try {
+      await api.post('/integrations/adtrack/test', {
+        trackingId: adtrackConfig.trackingId.trim(),
+        webhookSecret: adtrackConfig.webhookSecret.trim(),
+        baseUrl: adtrackConfig.baseUrl.trim(),
+      });
+      toast.success('AdTrack працює — тестова подія прийнята');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+      toast.error(`AdTrack: ${msg}`);
+    }
+    setTestingAdtrack(false);
   };
 
   const ROLE_LABELS = { ADMIN: 'Администратор', MANAGER: 'Менеджер', VIEWER: 'Просмотр', CALL_CENTER: 'Колл-центр' };
@@ -955,6 +1010,95 @@ export default function SettingsPage() {
                 className="btn-secondary"
               >
                 {testingTelegram ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400" /> : 'Тест'}
+              </button>
+            </div>
+          </div>
+
+          {/* AdTrack — server-side ad attribution + FB/TikTok CAPI on confirmed purchase */}
+          <div className="card p-5">
+            <div className="flex items-center gap-3 mb-4">
+              <svg viewBox="0 0 32 32" className="w-10 h-10 rounded-xl shrink-0" aria-label="AdTrack">
+                <defs>
+                  <linearGradient id="adtrack-icon-grad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+                    <stop offset="0" stopColor="#6366f1" />
+                    <stop offset="1" stopColor="#7c3aed" />
+                  </linearGradient>
+                </defs>
+                <rect width="32" height="32" rx="7" fill="url(#adtrack-icon-grad)" />
+                <path
+                  d="M5 22l7-10 5 6 6-11 4 8"
+                  fill="none"
+                  stroke="#fff"
+                  strokeWidth={3}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <div>
+                <h2 className="font-semibold text-gray-900 dark:text-white">AdTrack — атрибуція реклами</h2>
+                <p className="text-xs text-gray-400">
+                  Шле статус замовлень у AdTrack, який навчає FB/TikTok пікселі на підтверджений викуп. Опціонально.
+                </p>
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <div
+                    className={`relative w-10 h-5 rounded-full transition-colors ${adtrackConfig.active ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                    onClick={() => setAdtrackConfig((p) => ({ ...p, active: !p.active }))}
+                  >
+                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${adtrackConfig.active ? 'translate-x-5' : ''}`} />
+                  </div>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
+                    {adtrackConfig.active ? 'Увімкнено' : 'Вимкнено'}
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="label">Tracking ID</label>
+                <input
+                  className="input font-mono text-sm"
+                  value={adtrackConfig.trackingId}
+                  onChange={(e) => setAdtrackConfig((p) => ({ ...p, trackingId: e.target.value }))}
+                  placeholder="trackingId з AdTrack → Project → CRM webhook"
+                />
+              </div>
+              <div>
+                <label className="label">Webhook secret</label>
+                <input
+                  className="input font-mono text-sm"
+                  type="password"
+                  value={adtrackConfig.webhookSecret}
+                  onChange={(e) => setAdtrackConfig((p) => ({ ...p, webhookSecret: e.target.value }))}
+                  placeholder="secret з AdTrack → Project → CRM webhook"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Видно в AdTrack: Проект → секція «CRM webhook» → кнопка «Показати secret»
+                </p>
+              </div>
+              <div>
+                <label className="label">Backend URL <span className="text-gray-400">(опційно)</span></label>
+                <input
+                  className="input font-mono text-sm"
+                  value={adtrackConfig.baseUrl}
+                  onChange={(e) => setAdtrackConfig((p) => ({ ...p, baseUrl: e.target.value }))}
+                  placeholder="https://adtrack-backend.vercel.app"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-4">
+              <button onClick={handleSaveAdtrack} disabled={savingAdtrack} className="btn-primary">
+                {savingAdtrack ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : 'Зберегти'}
+              </button>
+              <button
+                onClick={handleTestAdtrack}
+                disabled={testingAdtrack || !adtrackConfig.trackingId || !adtrackConfig.webhookSecret}
+                className="btn-secondary"
+              >
+                {testingAdtrack ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400" /> : 'Тест'}
               </button>
             </div>
           </div>

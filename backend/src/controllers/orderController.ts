@@ -4,6 +4,7 @@ import { AuthRequest } from '../middleware/auth';
 import { notifyNewOrder, logActivity } from '../services/notifications';
 import { broadcastEvent } from '../services/eventBus';
 import { sendIncomeToRashod } from '../services/rashodWebhook';
+import { sendOrderStatusByIdToAdtrack } from '../services/adtrackWebhook';
 import { getNextManagerId } from '../services/roundRobin';
 import { checkAchievements } from '../services/achievements';
 
@@ -22,6 +23,19 @@ const ORDER_SELECT = {
   npWarehouseRef: true,
   trackingNumber: true,
   cancelReason: true,
+  // Attribution для AdTrack (видно в API чтобы UI мог отображать)
+  utmSource: true,
+  utmMedium: true,
+  utmCampaign: true,
+  utmContent: true,
+  utmTerm: true,
+  fbclid: true,
+  ttclid: true,
+  gclid: true,
+  customerIp: true,
+  customerUserAgent: true,
+  adtrackLastStatus: true,
+  adtrackLastSentAt: true,
   createdAt: true,
   updatedAt: true,
   customer: { select: { id: true, name: true, phone: true, email: true, city: true, address: true, isBlacklisted: true, blacklistReason: true } },
@@ -244,6 +258,9 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
 
   void checkAchievements(orgId);
 
+  // AdTrack: ручной заказ от оператора — новый лид (атрибуции обычно нет, это норма)
+  void sendOrderStatusByIdToAdtrack(order.id, 'NEW');
+
   return res.status(201).json(order);
 };
 
@@ -348,6 +365,12 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     void checkAchievements(orgId);
   }
 
+  // AdTrack: шлём любое релевантное изменение статуса. Сервис сам игнорит
+  // нерелевантные (CALLED/NO_ANSWER) и дедуплицирует повторы.
+  if (status && status !== existing.status) {
+    void sendOrderStatusByIdToAdtrack(id, status);
+  }
+
   await logActivity({
     organizationId: orgId,
     userId: req.user?.id,
@@ -448,6 +471,11 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
     select: ORDER_SELECT,
   });
 
+  // AdTrack: смены статуса из call-center (CALLED/NO_ANSWER не пойдут — мапа их игнорит).
+  if (status && status !== existing.status) {
+    void sendOrderStatusByIdToAdtrack(id, status);
+  }
+
   await logActivity({
     organizationId: orgId,
     userId: req.user?.id,
@@ -517,6 +545,13 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
       userId: req.user?.id,
     })),
   });
+
+  // AdTrack: шлём изменение только тем заказам, у кого статус реально менялся.
+  for (const o of orders) {
+    if (o.status !== status) {
+      void sendOrderStatusByIdToAdtrack(o.id, status);
+    }
+  }
 
   await logActivity({
     organizationId: orgId,

@@ -4,6 +4,7 @@ import { getTrackingStatuses } from '../services/novaPoshta';
 import { createNotification, logActivity } from '../services/notifications';
 import { sendTelegramMessage } from '../services/telegram';
 import { sendIncomeToRashod } from '../services/rashodWebhook';
+import { sendOrderStatusByIdToAdtrack } from '../services/adtrackWebhook';
 import { sendSmsToCustomer, getTurboSmsConfig } from '../services/turbosms';
 import { broadcastEvent } from '../services/eventBus';
 import { checkAchievements } from '../services/achievements';
@@ -126,6 +127,9 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
               broadcastEvent(organizationId, 'order_delivered', { orderNum: order.orderNum, total: order.total });
               void checkAchievements(organizationId);
             }
+
+            // AdTrack: подтверждённый выкуп / возврат — главный сигнал для FB CAPI.
+            void sendOrderStatusByIdToAdtrack(order.id, status.crmStatus);
 
             if (status.crmStatus === 'RETURNED') {
               try {

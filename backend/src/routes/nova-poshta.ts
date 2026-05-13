@@ -4,6 +4,7 @@ import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import { createTtn, npPost, NpSenderConfig } from '../services/novaPoshta';
 import { sendSmsToCustomer, getTurboSmsConfig } from '../services/turbosms';
+import { sendOrderStatusByIdToAdtrack } from '../services/adtrackWebhook';
 import { logActivity } from '../services/notifications';
 import { runTrackingCycle, trackerState } from '../workers/npTracker';
 import { runSlaCheck, slaTrackerState } from '../workers/slaTracker';
@@ -198,6 +199,9 @@ router.post('/create-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthRequ
       data: { orderId, action: 'TTN_CREATED', newValue: result.ttn, userId: req.user?.id },
     });
 
+    // AdTrack: создание TTN = заказ ушёл = SHIPPED
+    void sendOrderStatusByIdToAdtrack(orderId, 'SHIPPED');
+
     await logActivity({
       organizationId: orgId,
       userId: req.user?.id,
@@ -286,6 +290,9 @@ router.post('/bulk-create-ttn', requireRole('ADMIN', 'MANAGER'), async (req: Aut
       await prisma.orderHistory.create({
         data: { orderId: order.id, action: 'TTN_CREATED', newValue: result.ttn, userId: req.user?.id },
       });
+
+      // AdTrack: bulk-TTN → каждый заказ SHIPPED
+      void sendOrderStatusByIdToAdtrack(order.id, 'SHIPPED');
 
       if (smsConfig) {
         const text = `Ваше замовлення #${order.orderNum} відправлено 🚚\nТТН: ${result.ttn}\nhttps://tracking.novaposhta.ua/#/uk?waybill=${result.ttn}`;
