@@ -1092,7 +1092,14 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="label">Webhook secret</label>
+                <label className="label">
+                  Webhook secret
+                  {/\*{3,}/.test(adtrackConfig.webhookSecret) && (
+                    <span className="ml-2 text-xs text-gray-400">
+                      (вже збережено — залиште як є, щоб не міняти)
+                    </span>
+                  )}
+                </label>
                 <input
                   className="input font-mono text-sm"
                   type="password"

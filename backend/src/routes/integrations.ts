@@ -32,15 +32,53 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   return res.json(masked);
 });
 
+// Сигнатура маскированного значения из GET /integrations: `aaaa****bbbb`.
+// Если UI прислал такое значение — значит юзер просто round-trip'нул маску,
+// настоящего ключа он не вводил → сохраняем существующий.
+const MASKED_RE = /\*{3,}/;
+
 router.put('/:type', async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const { type } = req.params;
-  const { config, active } = req.body;
+  const { config: incomingConfig, active } = req.body as {
+    config?: Record<string, unknown>;
+    active?: boolean;
+  };
+
+  const existing = await prisma.integration.findUnique({
+    where: { organizationId_type: { organizationId: orgId, type } },
+  });
+
+  let baseConfig: Record<string, unknown> = {};
+  if (existing) {
+    try {
+      baseConfig = JSON.parse(existing.config) as Record<string, unknown>;
+    } catch {
+      // битый JSON в БД — стартуем с пустого
+    }
+  }
+
+  // Мерджим: каждое поле из incomingConfig перезаписывает existing,
+  // КРОМЕ строк с маской — их пропускаем, чтобы не затереть реальный секрет.
+  const mergedConfig: Record<string, unknown> = { ...baseConfig };
+  for (const [key, value] of Object.entries(incomingConfig ?? {})) {
+    if (typeof value === 'string' && MASKED_RE.test(value)) continue;
+    mergedConfig[key] = value;
+  }
+
+  const nextActive =
+    typeof active === 'boolean' ? active : existing?.active ?? false;
 
   const integration = await prisma.integration.upsert({
     where: { organizationId_type: { organizationId: orgId, type } },
-    update: { config: JSON.stringify(config), active: Boolean(active) },
-    create: { organizationId: orgId, type, name: type, config: JSON.stringify(config), active: Boolean(active) },
+    update: { config: JSON.stringify(mergedConfig), active: nextActive },
+    create: {
+      organizationId: orgId,
+      type,
+      name: type,
+      config: JSON.stringify(mergedConfig),
+      active: nextActive,
+    },
   });
 
   return res.json(integration);
