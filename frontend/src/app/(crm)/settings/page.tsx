@@ -530,6 +530,32 @@ export default function SettingsPage() {
     setSavingAdtrack(false);
   };
 
+  // Авто-сохранение при клике на тогл Активна. Не требует жать «Зберегти».
+  // При выключении — пишет в БД active=false мгновенно.
+  // При включении — то же, но если trackingId/secret пусты, делаем optimistic toggle
+  // и подсказываем что нужно заполнить креды (само сохранение тогла active=true пройдёт,
+  // адаптер silent-skip'нет вебхуки до тех пор пока конфиг не валиден).
+  const toggleAdtrackActive = async () => {
+    const next = !adtrackConfig.active;
+    setAdtrackConfig((p) => ({ ...p, active: next }));
+    try {
+      await api.put('/integrations/ADTRACK', {
+        config: {
+          trackingId: adtrackConfig.trackingId.trim(),
+          webhookSecret: adtrackConfig.webhookSecret.trim(),
+          baseUrl: adtrackConfig.baseUrl.trim() || 'https://adtrack-backend.vercel.app',
+        },
+        active: next,
+      });
+      toast.success(next ? 'AdTrack увімкнено' : 'AdTrack вимкнено');
+    } catch (err: unknown) {
+      // revert
+      setAdtrackConfig((p) => ({ ...p, active: !next }));
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+      toast.error(msg);
+    }
+  };
+
   const handleTestAdtrack = async () => {
     setTestingAdtrack(true);
     try {
@@ -1044,7 +1070,7 @@ export default function SettingsPage() {
                 <label className="flex items-center gap-2 cursor-pointer">
                   <div
                     className={`relative w-10 h-5 rounded-full transition-colors ${adtrackConfig.active ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}
-                    onClick={() => setAdtrackConfig((p) => ({ ...p, active: !p.active }))}
+                    onClick={toggleAdtrackActive}
                   >
                     <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${adtrackConfig.active ? 'translate-x-5' : ''}`} />
                   </div>
