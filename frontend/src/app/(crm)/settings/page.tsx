@@ -601,9 +601,13 @@ export default function SettingsPage() {
   const handleTestAdtrack = async () => {
     setTestingAdtrack(true);
     try {
+      const s = adtrackConfig.webhookSecret;
+      // Если в поле сейчас маска из точек (юзер не вводил) — не шлём её на бэк,
+      // бэк сам подтянет реальный ключ из БД для теста.
+      const realSecret = s && !/^[•·]+$/.test(s) ? s.trim() : '';
       await api.post('/integrations/adtrack/test', {
         trackingId: adtrackConfig.trackingId.trim(),
-        webhookSecret: adtrackConfig.webhookSecret.trim(),
+        webhookSecret: realSecret,
         baseUrl: adtrackConfig.baseUrl.trim(),
       });
       toast.success('AdTrack працює — тестова подія прийнята');

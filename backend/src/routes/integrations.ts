@@ -131,10 +131,13 @@ router.post('/adtrack/test', async (req: AuthRequest, res: Response) => {
     webhookSecret?: string;
     baseUrl?: string;
   };
-  // Если в body есть креды — тестируем их напрямую (без сохранения).
-  // Если пусто — fallback на сохранённую интеграцию.
-  const inline =
-    trackingId && webhookSecret ? { trackingId, webhookSecret, baseUrl } : undefined;
+  // Если webhookSecret выглядит как маска из точек/звёздочек — это не настоящий
+  // секрет, а round-trip визуального плейсхолдера. Используем сохранённый в БД.
+  const isMask = (s: string | undefined) =>
+    typeof s === 'string' && (/^[•·]+$/.test(s) || /\*{3,}/.test(s));
+  const realSecret = webhookSecret && !isMask(webhookSecret) ? webhookSecret : undefined;
+  const inline = trackingId && realSecret ? { trackingId, webhookSecret: realSecret, baseUrl } : undefined;
+
   const result = await testAdtrackConnection(orgId, inline);
   if (result.ok) return res.json({ success: true, message: 'AdTrack reachable, credentials valid' });
   return res.status(400).json({ success: false, error: result.error });
