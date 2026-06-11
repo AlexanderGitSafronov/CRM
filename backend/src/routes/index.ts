@@ -21,6 +21,7 @@ import achievementRoutes from './achievements';
 import goalsRoutes from './goals';
 import orderViewsRoutes from './orderViews';
 import cronRoutes from './cron';
+import publicRoutes from './public';
 
 const router = Router();
 
@@ -46,5 +47,10 @@ router.use('/achievements', achievementRoutes);
 router.use('/goals', goalsRoutes);
 router.use('/order-views', orderViewsRoutes);
 router.use('/cron', cronRoutes);
+// Public (unauthenticated) — страница отслеживания заказа клиентом по publicToken.
+// authenticate применяется per-route внутри каждого роутера, а не глобально,
+// поэтому этот роутер монтируется без authenticate и остаётся публичным
+// (как /api/webhook/order). Доступен как /api/public/track/:token.
+router.use('/public', publicRoutes);
 
 export default router;

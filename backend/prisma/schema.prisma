@@ -225,6 +225,12 @@ model Order {
   returnedAt          DateTime?
   npArrivedAt         DateTime?
   npArrivalNotifiedAt DateTime?
+  // Дедуп напоминания о прибытии (для более позднего батча/воркера).
+  npReminderSentAt    DateTime?
+
+  // Публичный токен для страницы отслеживания заказа клиентом (без авторизации).
+  // Nullable/additive: бэкфилл существующих строк делается вне этого воркфлоу.
+  publicToken String? @unique
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

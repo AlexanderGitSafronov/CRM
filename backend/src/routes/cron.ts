@@ -4,6 +4,9 @@ import { runTrackingCycle } from '../workers/npTracker';
 import { runSlaCheck } from '../workers/slaTracker';
 import { runCallbackCheck } from '../workers/callbackReminder';
 import { runLowStockCheck } from '../workers/lowStockWatcher';
+import prisma from '../services/prisma';
+import { getTurboSmsBalance } from '../services/turbosms';
+import { sendTelegramMessage } from '../services/telegram';
 import logger from '../utils/logger';
 
 /**
@@ -34,11 +37,67 @@ const checkCronAuth = (req: Request, res: Response): boolean => {
   return true;
 };
 
+// Порог низкого баланса TurboSMS — при падении ниже шлём ОДИН алерт в Telegram.
+const TURBOSMS_LOW_BALANCE_THRESHOLD = Number(process.env.TURBOSMS_LOW_BALANCE_THRESHOLD) || 50;
+
+// Для каждой организации с активной интеграцией TurboSMS запрашиваем баланс
+// и, если он ниже порога, шлём одно предупреждение в командный чат Telegram.
+async function runSmsBalanceCheck(): Promise<{ checked: number; lowBalance: number }> {
+  const result = { checked: 0, lowBalance: 0 };
+
+  const integrations = await prisma.integration.findMany({
+    where: { type: 'TURBOSMS', active: true },
+    select: { organizationId: true, config: true },
+  });
+
+  for (const integration of integrations) {
+    let token: string | undefined;
+    try {
+      const cfg = JSON.parse(integration.config) as { token?: string };
+      token = cfg.token;
+    } catch {
+      continue; // битый JSON — пропускаем
+    }
+    if (!token) continue;
+
+    result.checked += 1;
+    const balance = await getTurboSmsBalance(token);
+    if (balance === null || balance >= TURBOSMS_LOW_BALANCE_THRESHOLD) continue;
+
+    result.lowBalance += 1;
+
+    // Один алерт в командный чат, если у org настроен Telegram.
+    try {
+      const tg = await prisma.integration.findUnique({
+        where: { organizationId_type: { organizationId: integration.organizationId, type: 'TELEGRAM' } },
+      });
+      if (tg?.active) {
+        const cfg = JSON.parse(tg.config) as { botToken?: string; chatId?: string };
+        if (cfg.botToken && cfg.chatId) {
+          await sendTelegramMessage({
+            botToken: cfg.botToken,
+            chatId: cfg.chatId,
+            message: `⚠️ Баланс TurboSMS низький: ${balance}`,
+          });
+        }
+      }
+    } catch (tgErr) {
+      logger.error('SMS balance telegram alert error:', tgErr);
+    }
+  }
+
+  logger.info(`SMS balance: checked=${result.checked} lowBalance=${result.lowBalance}`);
+  return result;
+}
+
 const JOBS: Record<string, () => Promise<unknown>> = {
   np: runTrackingCycle,
   sla: runSlaCheck,
   callbacks: runCallbackCheck,
   lowstock: runLowStockCheck,
+  // 'smsbalance' намеренно НЕ входит в JOBS/'all': шлёт алерты в Telegram,
+  // на частом тике 'all' это спамило бы команду. Дёргается отдельно
+  // (например раз в сутки своим расписанием). См. обработку job в runJob.
 };
 
 const runJob = async (req: Request, res: Response) => {
@@ -54,9 +113,14 @@ const runJob = async (req: Request, res: Response) => {
       return res.json({ job: 'all', results });
     }
 
+    if (job === 'smsbalance') {
+      const stats = await runSmsBalanceCheck();
+      return res.json({ job: 'smsbalance', ...stats });
+    }
+
     const fn = JOBS[job];
     if (!fn) {
-      return res.status(404).json({ error: 'Unknown job. Use: np | sla | callbacks | lowstock | all' });
+      return res.status(404).json({ error: 'Unknown job. Use: np | sla | callbacks | lowstock | smsbalance | all' });
     }
     const stats = await fn();
     return res.json({ job, stats });

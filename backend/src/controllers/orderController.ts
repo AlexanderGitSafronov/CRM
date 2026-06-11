@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import crypto from 'crypto';
 import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { notifyNewOrder, logActivity } from '../services/notifications';
@@ -240,6 +241,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
         source,
         comment: [blacklistWarning, comment?.trim()].filter(Boolean).join('\n') || null,
         total,
+        publicToken: crypto.randomBytes(16).toString('hex'),
         items: {
           create: items.map((item: {
             productId?: string;

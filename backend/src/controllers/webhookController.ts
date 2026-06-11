@@ -6,6 +6,7 @@ import { broadcastEvent } from '../services/eventBus';
 import { getNextManagerId } from '../services/roundRobin';
 import { checkAchievements } from '../services/achievements';
 import { sendOrderStatusToAdtrack } from '../services/adtrackWebhook';
+import { sendSmsToCustomer, getTurboSmsConfig } from '../services/turbosms';
 import { AuthRequest } from '../middleware/auth';
 import {
   assertOrderQuota,
@@ -140,6 +141,10 @@ export const receiveOrder = async (req: Request, res: Response) => {
     .filter((pid): pid is string => Boolean(pid));
   const orgProductIds = await filterOrgProductIds(orgId, requestedProductIds);
 
+  // Публичный токен страницы отслеживания — генерируем заранее, чтобы
+  // переиспользовать его и в записи заказа, и в trackUrl для SMS.
+  const publicToken = crypto.randomBytes(16).toString('hex');
+
   // orderNum генерируется не атомарно — при гонке retry пересчитает номер (см. orderGuards)
   const order = await createOrderWithOrderNumRetry(orgId, (orderNum) =>
     prisma.order.create({
@@ -151,6 +156,7 @@ export const receiveOrder = async (req: Request, res: Response) => {
         source,
         comment: [blacklistWarning, comment?.trim()].filter(Boolean).join('\n') || null,
         total,
+        publicToken,
         deliveryService: delivery?.service?.trim() || null,
         deliveryCity: delivery?.city?.trim() || null,
         deliveryAddress: delivery?.address?.trim() || null,
@@ -228,6 +234,16 @@ export const receiveOrder = async (req: Request, res: Response) => {
     },
     attribution: { fbclid, ttclid, gclid, utmSource, utmMedium, utmCampaign, utmContent, utmTerm },
   });
+
+  // Клиентская SMS «замовлення прийнято». Полностью dormant: если TurboSMS не
+  // настроен/выключен у этой орг — getTurboSmsConfig вернёт null и мы тихо пропускаем,
+  // не ломая флоу заказа. Fire-and-forget с .catch.
+  const smsCfg = await getTurboSmsConfig(prisma, orgId);
+  if (smsCfg && smsCfg.smsOnOrderCreated !== false) {
+    const trackUrl = `${process.env.FRONTEND_URL || ''}/t/${publicToken}`;
+    const text = `Дякуємо за замовлення №${order.orderNum}! Менеджер зателефонує найближчим часом. Стежити: ${trackUrl}`;
+    sendSmsToCustomer(dbCustomer.phone, text, smsCfg).catch(() => {});
+  }
 
   return res.status(201).json({
     success: true,

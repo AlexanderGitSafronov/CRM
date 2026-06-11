@@ -30,6 +30,17 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
 
   const result = { checked: 0, updated: 0, errors: 0 };
 
+  // Кеш TurboSMS-конфіга на час одного циклу, щоб не перевитягувати інтеграцію
+  // для кожного замовлення/нагадування. Значення може бути null (TurboSMS не
+  // налаштовано/не активовано) — це валідний кешований результат.
+  const smsConfigCache = new Map<string, Awaited<ReturnType<typeof getTurboSmsConfig>>>();
+  const resolveSmsConfig = async (organizationId: string) => {
+    if (smsConfigCache.has(organizationId)) return smsConfigCache.get(organizationId)!;
+    const cfg = await getTurboSmsConfig(prisma, organizationId);
+    smsConfigCache.set(organizationId, cfg);
+    return cfg;
+  };
+
   try {
     // Get all orgs that have at least one SHIPPED order with TTN
     const orgsWithShipped = await prisma.order.findMany({
@@ -57,6 +68,7 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
           id: true, orderNum: true, trackingNumber: true, managerId: true,
           total: true, source: true, organizationId: true,
           shippedAt: true, deliveredAt: true, returnedAt: true, npArrivedAt: true,
+          npArrivalNotifiedAt: true, deliveryCity: true, deliveryAddress: true,
           customer: { select: { name: true, phone: true } },
         },
       });
@@ -81,9 +93,32 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
             // тож повторні цикли не перетирають таймстемп і не тригерять побічні ефекти.
             if (!status.crmStatus) {
               if (status.arrived && !order.npArrivedAt) {
+                // Таймстемп прибуття не залежить від SMS — ставимо завжди.
+                const arrivalData: { npArrivedAt: Date; npArrivalNotifiedAt?: Date } = {
+                  npArrivedAt: new Date(),
+                };
+
+                // Сповіщаємо клієнта про прибуття один раз (дедуп по npArrivalNotifiedAt).
+                // Якщо TurboSMS не налаштовано (cfg === null) — лишаємо npArrivalNotifiedAt
+                // порожнім, щоб орг міг сповістити пізніше, якщо ввімкне SMS.
+                // Раз сповістили — більше не шлемо.
+                if (!order.npArrivalNotifiedAt) {
+                  const cfg = await resolveSmsConfig(organizationId);
+                  if (cfg && cfg.smsOnArrival !== false) {
+                    const location = order.deliveryAddress?.trim() || order.deliveryCity?.trim() || '';
+                    const where = location ? ` ${location}` : '';
+                    sendSmsToCustomer(
+                      order.customer.phone,
+                      `Ваше замовлення №${order.orderNum} прибуло у відділення${where}. ТТН ${order.trackingNumber}. Очікуємо вас!`,
+                      cfg,
+                    ).catch(() => {});
+                    arrivalData.npArrivalNotifiedAt = new Date();
+                  }
+                }
+
                 await prisma.order.update({
                   where: { id: order.id },
-                  data: { npArrivedAt: new Date() },
+                  data: arrivalData,
                 });
               }
               continue;
@@ -157,7 +192,7 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
 
             if (status.crmStatus === 'RETURNED') {
               try {
-                const smsConfig = await getTurboSmsConfig(prisma, organizationId);
+                const smsConfig = await resolveSmsConfig(organizationId);
                 if (smsConfig) {
                   await sendSmsToCustomer(
                     order.customer.phone,
@@ -177,6 +212,44 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
           result.errors++;
           logger.error('NP Tracker batch error:', batchErr);
         }
+      }
+
+      // Нагадування про невикуплену посилку: прибула > 2 днів тому, ще SHIPPED,
+      // нагадування ще не слали. Це лише читання БД — ЖОДНИХ додаткових викликів НП API.
+      // Дедуп по npReminderSentAt. Якщо TurboSMS не налаштовано — тихо пропускаємо.
+      try {
+        const reminderCfg = await resolveSmsConfig(organizationId);
+        if (reminderCfg && reminderCfg.smsOnArrival !== false) {
+          const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+          const toRemind = await prisma.order.findMany({
+            where: {
+              organizationId,
+              status: 'SHIPPED',
+              npArrivedAt: { not: null, lte: twoDaysAgo },
+              npReminderSentAt: null,
+              trackingNumber: { not: null },
+            },
+            select: {
+              id: true, orderNum: true, trackingNumber: true,
+              customer: { select: { phone: true } },
+            },
+            take: 100,
+          });
+
+          for (const ord of toRemind) {
+            sendSmsToCustomer(
+              ord.customer.phone,
+              `Нагадуємо: замовлення №${ord.orderNum} очікує у відділенні. ТТН ${ord.trackingNumber}. Заберіть, будь ласка, щоб не повернулось.`,
+              reminderCfg,
+            ).catch(() => {});
+            await prisma.order.update({
+              where: { id: ord.id },
+              data: { npReminderSentAt: new Date() },
+            });
+          }
+        }
+      } catch (reminderErr) {
+        logger.error('NP Tracker reminder error:', reminderErr);
       }
     }
   } catch (err) {

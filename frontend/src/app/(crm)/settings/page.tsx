@@ -227,11 +227,16 @@ export default function SettingsPage() {
     token: '',
     senderName: '',
     channel: 'viber_sms' as 'sms' | 'viber' | 'viber_sms',
+    smsOnOrderCreated: true,
+    smsOnArrival: true,
     active: false,
   });
   const [savingTurbo, setSavingTurbo] = useState(false);
   const [testingTurbo, setTestingTurbo] = useState(false);
   const [turboTestPhone, setTurboTestPhone] = useState('');
+  // null = ще не завантажено / TurboSMS не активний; число = баланс у грн.
+  const [turboBalance, setTurboBalance] = useState<number | null>(null);
+  const [loadingBalance, setLoadingBalance] = useState(false);
 
   // Telegram
   const [telegramConfig, setTelegramConfig] = useState({ botToken: '', chatId: '', active: false });
@@ -325,8 +330,12 @@ export default function SettingsPage() {
             token: cfg.token || '',
             senderName: cfg.senderName || '',
             channel: cfg.channel || 'viber_sms',
+            // Якщо поля ще немає в збереженому конфізі — вважаємо увімкненим (default checked)
+            smsOnOrderCreated: cfg.smsOnOrderCreated !== false,
+            smsOnArrival: cfg.smsOnArrival !== false,
             active: turbo.active,
           });
+          if (turbo.active) fetchTurboBalance();
         }
         const np = ints.find((i) => i.type === 'NOVA_POSHTA_SENDER');
         if (np) {
@@ -486,14 +495,34 @@ export default function SettingsPage() {
     setSavingNp(false);
   };
 
+  // Баланс TurboSMS — тягнемо з бекенда (він використовує збережений токен).
+  const fetchTurboBalance = async () => {
+    setLoadingBalance(true);
+    try {
+      const res = await api.get('/integrations/turbosms/balance');
+      const b = res.data?.balance;
+      setTurboBalance(typeof b === 'number' ? b : null);
+    } catch {
+      setTurboBalance(null);
+    }
+    setLoadingBalance(false);
+  };
+
   const handleSaveTurbo = async () => {
     setSavingTurbo(true);
     try {
       await api.put('/integrations/TURBOSMS', {
-        config: { token: turboConfig.token, senderName: turboConfig.senderName, channel: turboConfig.channel },
+        config: {
+          token: turboConfig.token,
+          senderName: turboConfig.senderName,
+          channel: turboConfig.channel,
+          smsOnOrderCreated: turboConfig.smsOnOrderCreated,
+          smsOnArrival: turboConfig.smsOnArrival,
+        },
         active: turboConfig.active,
       });
       toast.success('Налаштування TurboSMS збережено');
+      if (turboConfig.active) fetchTurboBalance();
     } catch {
       toast.error('Помилка');
     }
@@ -939,7 +968,7 @@ export default function SettingsPage() {
               </div>
               <div>
                 <h2 className="font-semibold text-gray-900 dark:text-white">TurboSMS — SMS / Viber клієнтам</h2>
-                <p className="text-xs text-gray-400">Повідомлення клієнту при відправці (ТТН створено)</p>
+                <p className="text-xs text-gray-400">Повідомлення клієнту про статус замовлення</p>
               </div>
               <div className="ml-auto flex items-center gap-2">
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -955,6 +984,27 @@ export default function SettingsPage() {
                 </label>
               </div>
             </div>
+
+            {/* Баланс рахунку TurboSMS */}
+            {(loadingBalance || turboBalance !== null) && (
+              <div className="flex items-center gap-2 mb-4 text-sm">
+                <span className="text-gray-500 dark:text-gray-400">Баланс:</span>
+                {loadingBalance ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                ) : (
+                  <>
+                    <span className="font-semibold text-gray-900 dark:text-white">
+                      {turboBalance!.toLocaleString('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} грн
+                    </span>
+                    {turboBalance! < 50 && (
+                      <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                        Низький баланс — поповніть рахунок
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
 
             <div className="space-y-3">
               <div>
@@ -994,6 +1044,28 @@ export default function SettingsPage() {
                   <option value="viber">Тільки Viber</option>
                   <option value="sms">Тільки SMS</option>
                 </select>
+              </div>
+
+              {/* Тригери авто-відправки клієнту */}
+              <div className="pt-1 space-y-2">
+                <label className="flex items-center justify-between gap-3 cursor-pointer">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">SMS при прийнятті замовлення</span>
+                  <div
+                    className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${turboConfig.smsOnOrderCreated ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                    onClick={() => setTurboConfig((p) => ({ ...p, smsOnOrderCreated: !p.smsOnOrderCreated }))}
+                  >
+                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${turboConfig.smsOnOrderCreated ? 'translate-x-5' : ''}`} />
+                  </div>
+                </label>
+                <label className="flex items-center justify-between gap-3 cursor-pointer">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">SMS коли посилка прибула у відділення</span>
+                  <div
+                    className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${turboConfig.smsOnArrival ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                    onClick={() => setTurboConfig((p) => ({ ...p, smsOnArrival: !p.smsOnArrival }))}
+                  >
+                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${turboConfig.smsOnArrival ? 'translate-x-5' : ''}`} />
+                  </div>
+                </label>
               </div>
             </div>
 

@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import prisma from '../services/prisma';
 import { sendTelegramMessage } from '../services/telegram';
-import { sendSmsToCustomer, type TurboSmsChannel } from '../services/turbosms';
+import { sendSmsToCustomer, getTurboSmsBalance, type TurboSmsChannel } from '../services/turbosms';
 import { testAdtrackConnection } from '../services/adtrackWebhook';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 
@@ -123,10 +123,32 @@ router.post('/turbosms/test', async (req: AuthRequest, res: Response) => {
   const ok = await sendSmsToCustomer(
     phone,
     `✅ Тестове повідомлення від CRM. Канал: ${channel ?? 'viber_sms'}`,
-    { token, senderName, channel: channel ?? 'viber_sms' },
+    { token, senderName, channel: channel ?? 'viber_sms', smsOnOrderCreated: true, smsOnArrival: true },
   );
   if (ok) return res.json({ success: true, message: 'Повідомлення надіслано' });
   return res.status(400).json({ success: false, error: 'Не вдалось надіслати. Перевірте токен та ім\'я відправника.' });
+});
+
+// Баланс TurboSMS по сохранённому в БД токену организации.
+// Возвращает { balance: null } если интеграция не настроена/нет токена/недоступна.
+router.get('/turbosms/balance', async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const integration = await prisma.integration.findUnique({
+    where: { organizationId_type: { organizationId: orgId, type: 'TURBOSMS' } },
+  });
+  if (!integration) return res.json({ balance: null });
+
+  let token: string | undefined;
+  try {
+    const cfg = JSON.parse(integration.config) as { token?: string };
+    token = cfg.token;
+  } catch {
+    // битый JSON — считаем не настроенным
+  }
+  if (!token) return res.json({ balance: null });
+
+  const balance = await getTurboSmsBalance(token);
+  return res.json({ balance });
 });
 
 router.post('/adtrack/test', async (req: AuthRequest, res: Response) => {

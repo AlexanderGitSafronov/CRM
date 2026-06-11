@@ -2,6 +2,7 @@ import fetch from 'node-fetch';
 import logger from '../utils/logger';
 
 const TURBOSMS_URL = 'https://api.turbosms.ua/message/send.json';
+const TURBOSMS_BALANCE_URL = 'https://api.turbosms.ua/user/balance.json';
 
 export type TurboSmsChannel = 'sms' | 'viber' | 'viber_sms';
 
@@ -9,6 +10,8 @@ export interface TurboSmsConfig {
   token: string;
   senderName: string;
   channel: TurboSmsChannel;
+  smsOnOrderCreated: boolean;
+  smsOnArrival: boolean;
 }
 
 interface TurboSmsResponse {
@@ -79,8 +82,38 @@ export async function getTurboSmsConfig(prisma: {
       token: cfg.token,
       senderName: cfg.senderName,
       channel: cfg.channel ?? 'viber_sms',
+      // Новые типы SMS включены по умолчанию для уже настроенных конфигов:
+      // если поля нет в JSON — считаем true.
+      smsOnOrderCreated: cfg.smsOnOrderCreated ?? true,
+      smsOnArrival: cfg.smsOnArrival ?? true,
     };
   } catch {
+    return null;
+  }
+}
+
+interface TurboSmsBalanceResponse {
+  response_code?: number;
+  response_status?: string;
+  response_result?: { balance?: number | string } | null;
+  balance?: number | string;
+}
+
+// Возвращает числовой баланс аккаунта TurboSMS или null при ошибке/невалидном ответе.
+export async function getTurboSmsBalance(token: string): Promise<number | null> {
+  try {
+    const response = await fetch(TURBOSMS_BALANCE_URL, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = (await response.json()) as TurboSmsBalanceResponse;
+    const raw = data.response_result?.balance ?? data.balance;
+    const balance = typeof raw === 'string' ? parseFloat(raw) : raw;
+    if (typeof balance === 'number' && Number.isFinite(balance)) return balance;
+    logger.warn('TurboSMS: balance parse failed', data);
+    return null;
+  } catch (err) {
+    logger.error('TurboSMS balance error:', err);
     return null;
   }
 }
