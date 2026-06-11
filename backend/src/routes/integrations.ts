@@ -46,7 +46,11 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 // Сигнатура маскированного значения: либо чистая bullet-строка `•••••…`,
 // либо легаси `aaaa****bbbb`. В обоих случаях НЕ затираем реальный ключ.
 // • = BULLET, · = MIDDLE DOT (на всякий случай).
-const MASKED_RE = /^[•·]+$|\*{3,}/;
+// Оба альтернативных паттерна заякорены: иначе настоящий секрет,
+// содержащий `***` внутри, ошибочно считался бы маской и терялся.
+const MASKED_RE = /^[•·]+$|^\S{0,6}\*{3,}\S{0,6}$/;
+const isSensitiveKey = (key: string) =>
+  SENSITIVE_KEYS.some((k) => key.toLowerCase().includes(k.toLowerCase()));
 
 router.put('/:type', async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
@@ -70,10 +74,11 @@ router.put('/:type', async (req: AuthRequest, res: Response) => {
   }
 
   // Мерджим: каждое поле из incomingConfig перезаписывает existing,
-  // КРОМЕ строк с маской — их пропускаем, чтобы не затереть реальный секрет.
+  // КРОМЕ чувствительных ключей со значением-маской — их пропускаем,
+  // чтобы не затереть реальный секрет. Нечувствительные поля всегда берём как есть.
   const mergedConfig: Record<string, unknown> = { ...baseConfig };
   for (const [key, value] of Object.entries(incomingConfig ?? {})) {
-    if (typeof value === 'string' && MASKED_RE.test(value)) continue;
+    if (isSensitiveKey(key) && typeof value === 'string' && MASKED_RE.test(value)) continue;
     mergedConfig[key] = value;
   }
 
@@ -134,7 +139,7 @@ router.post('/adtrack/test', async (req: AuthRequest, res: Response) => {
   // Если webhookSecret выглядит как маска из точек/звёздочек — это не настоящий
   // секрет, а round-trip визуального плейсхолдера. Используем сохранённый в БД.
   const isMask = (s: string | undefined) =>
-    typeof s === 'string' && (/^[•·]+$/.test(s) || /\*{3,}/.test(s));
+    typeof s === 'string' && MASKED_RE.test(s);
   const realSecret = webhookSecret && !isMask(webhookSecret) ? webhookSecret : undefined;
   const inline = trackingId && realSecret ? { trackingId, webhookSecret: realSecret, baseUrl } : undefined;
 

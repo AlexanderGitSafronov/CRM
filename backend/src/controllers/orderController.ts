@@ -7,6 +7,13 @@ import { sendIncomeToRashod } from '../services/rashodWebhook';
 import { sendOrderStatusByIdToAdtrack } from '../services/adtrackWebhook';
 import { getNextManagerId } from '../services/roundRobin';
 import { checkAchievements } from '../services/achievements';
+import {
+  assertOrderQuota,
+  createOrderWithOrderNumRetry,
+  filterOrgProductIds,
+  validateOrderItems,
+  validateOrgManagerId,
+} from '../services/orderGuards';
 
 const ORDER_SELECT = {
   id: true,
@@ -155,8 +162,34 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     return res.status(400).json({ error: 'Customer name and phone required' });
   }
 
-  if (!items?.length) {
-    return res.status(400).json({ error: 'At least one item required' });
+  const itemsCheck = validateOrderItems(items);
+  if (!itemsCheck.ok) {
+    return res.status(400).json({ error: itemsCheck.error });
+  }
+
+  // Менеджер из body — только из своей организации
+  if (managerId) {
+    const validManager = await validateOrgManagerId(orgId, managerId);
+    if (!validManager) {
+      return res.status(400).json({ error: 'Invalid manager' });
+    }
+  }
+
+  // productId позиций — только товары своей организации
+  const requestedProductIds: string[] = items
+    .map((item: { productId?: string }) => item.productId)
+    .filter((pid: string | undefined): pid is string => Boolean(pid));
+  if (requestedProductIds.length > 0) {
+    const orgProductIds = await filterOrgProductIds(orgId, requestedProductIds);
+    if (requestedProductIds.some((pid) => !orgProductIds.has(pid))) {
+      return res.status(400).json({ error: 'Invalid productId' });
+    }
+  }
+
+  // Plan limit: заказы за текущий календарный месяц
+  const quota = await assertOrderQuota(orgId);
+  if (!quota.ok) {
+    return res.status(402).json({ error: `Досягнуто ліміт замовлень тарифу: максимум ${quota.max} замовлень на місяць. Оновіть план.` });
   }
 
   // Find or create customer (scoped by org)
@@ -177,17 +210,11 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     });
   }
 
+  const customerId = dbCustomer.id;
+
   const blacklistWarning = dbCustomer.isBlacklisted
     ? `⚠️ ЧОРНИЙ СПИСОК: ${dbCustomer.blacklistReason || 'без причини'}`
     : null;
-
-  // Generate orderNum scoped to this org
-  const lastOrder = await prisma.order.findFirst({
-    where: { organizationId: orgId },
-    orderBy: { orderNum: 'desc' },
-    select: { orderNum: true },
-  });
-  const orderNum = (lastOrder?.orderNum ?? 0) + 1;
 
   const total = items.reduce(
     (sum: number, item: { price: number; quantity: number }) =>
@@ -201,38 +228,41 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     (await getNextManagerId(orgId)) ||
     null;
 
-  const order = await prisma.order.create({
-    data: {
-      organizationId: orgId,
-      orderNum,
-      customerId: dbCustomer.id,
-      managerId: assignedManagerId || null,
-      source,
-      comment: [blacklistWarning, comment?.trim()].filter(Boolean).join('\n') || null,
-      total,
-      items: {
-        create: items.map((item: {
-          productId?: string;
-          name: string;
-          quantity: number;
-          price: number;
-        }) => ({
-          productId: item.productId || null,
-          name: item.name,
-          quantity: item.quantity,
-          price: item.price,
-        })),
-      },
-      history: {
-        create: {
-          action: 'CREATED',
-          newValue: 'NEW',
-          userId: req.user?.id,
+  // orderNum генерируется не атомарно — при гонке retry пересчитает номер (см. orderGuards)
+  const order = await createOrderWithOrderNumRetry(orgId, (orderNum) =>
+    prisma.order.create({
+      data: {
+        organizationId: orgId,
+        orderNum,
+        customerId,
+        managerId: assignedManagerId || null,
+        source,
+        comment: [blacklistWarning, comment?.trim()].filter(Boolean).join('\n') || null,
+        total,
+        items: {
+          create: items.map((item: {
+            productId?: string;
+            name: string;
+            quantity: number;
+            price: number;
+          }) => ({
+            productId: item.productId || null,
+            name: item.name,
+            quantity: item.quantity,
+            price: item.price,
+          })),
+        },
+        history: {
+          create: {
+            action: 'CREATED',
+            newValue: 'NEW',
+            userId: req.user?.id,
+          },
         },
       },
-    },
-    select: { ...ORDER_SELECT, history: true },
-  });
+      select: { ...ORDER_SELECT, history: true },
+    })
+  );
 
   broadcastEvent(orgId, 'new_order', { orderNum: order.orderNum, source: order.source });
 
@@ -302,6 +332,13 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
   }
 
   if (managerId !== undefined) {
+    // Менеджер должен принадлежать этой организации (как в bulkAssignManager)
+    if (managerId) {
+      const validManager = await validateOrgManagerId(orgId, managerId);
+      if (!validManager) {
+        return res.status(400).json({ error: 'Invalid manager' });
+      }
+    }
     updateData.managerId = managerId || null;
     historyEntries.push({
       action: 'MANAGER_CHANGED',
@@ -315,6 +352,22 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
   }
 
   if (items?.length) {
+    const itemsCheck = validateOrderItems(items);
+    if (!itemsCheck.ok) {
+      return res.status(400).json({ error: itemsCheck.error });
+    }
+
+    // productId позиций — только товары своей организации
+    const requestedProductIds: string[] = items
+      .map((item: { productId?: string }) => item.productId)
+      .filter((pid: string | undefined): pid is string => Boolean(pid));
+    if (requestedProductIds.length > 0) {
+      const orgProductIds = await filterOrgProductIds(orgId, requestedProductIds);
+      if (requestedProductIds.some((pid) => !orgProductIds.has(pid))) {
+        return res.status(400).json({ error: 'Invalid productId' });
+      }
+    }
+
     const total = items.reduce(
       (sum: number, item: { price: number; quantity: number }) =>
         sum + item.price * item.quantity,
@@ -353,7 +406,11 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     });
   });
 
-  if (status === 'DELIVERED') {
+  const statusChanged = Boolean(status && status !== existing.status);
+
+  // Side-effects доставки только при реальной смене статуса — иначе повторное
+  // сохранение уже DELIVERED заказа дублировало бы доход в Rashod.
+  if (statusChanged && status === 'DELIVERED') {
     sendIncomeToRashod({
       orderId: id,
       orderNum: order.orderNum,
@@ -367,7 +424,7 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
 
   // AdTrack: шлём любое релевантное изменение статуса. Сервис сам игнорит
   // нерелевантные (CALLED/NO_ANSWER) и дедуплицирует повторы.
-  if (status && status !== existing.status) {
+  if (statusChanged) {
     void sendOrderStatusByIdToAdtrack(id, status);
   }
 
@@ -441,22 +498,27 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
   if (comment !== undefined) updateData.comment = comment?.trim() || null;
   if (cancelReason !== undefined) updateData.cancelReason = cancelReason?.trim() || null;
 
-  if (upsellAmount && Number(upsellAmount) > 0) {
+  if (upsellAmount !== undefined && upsellAmount !== null && upsellAmount !== '') {
     const amount = Number(upsellAmount);
-    await prisma.orderItem.create({
-      data: {
-        orderId: id,
-        name: 'Доп. продаж',
-        quantity: 1,
-        price: amount,
-      },
-    });
-    updateData.total = existing.total + amount;
-    historyEntries.push({
-      action: 'UPSELL_ADDED',
-      newValue: `+${amount}`,
-      userId: req.user?.id,
-    });
+    if (!Number.isFinite(amount) || amount < 0 || amount > 10000000) {
+      return res.status(400).json({ error: 'Invalid upsellAmount' });
+    }
+    if (amount > 0) {
+      await prisma.orderItem.create({
+        data: {
+          orderId: id,
+          name: 'Доп. продаж',
+          quantity: 1,
+          price: amount,
+        },
+      });
+      updateData.total = existing.total + amount;
+      historyEntries.push({
+        action: 'UPSELL_ADDED',
+        newValue: `+${amount}`,
+        userId: req.user?.id,
+      });
+    }
   }
 
   if (historyEntries.length > 0) {
@@ -528,7 +590,7 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
 
   const orders = await prisma.order.findMany({
     where: { id: { in: ids }, organizationId: orgId },
-    select: { id: true, status: true },
+    select: { id: true, status: true, orderNum: true, total: true, source: true },
   });
 
   await prisma.order.updateMany({
@@ -545,6 +607,24 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
       userId: req.user?.id,
     })),
   });
+
+  // DELIVERED через bulk: доход в Rashod шлём только заказам, реально перешедшим
+  // в DELIVERED (как в одиночном updateOrder).
+  if (status === 'DELIVERED') {
+    const newlyDelivered = orders.filter((o) => o.status !== 'DELIVERED');
+    for (const o of newlyDelivered) {
+      sendIncomeToRashod({
+        orderId: o.id,
+        orderNum: o.orderNum,
+        total: o.total,
+        source: o.source,
+        deliveredAt: new Date(),
+      }).catch(() => {});
+    }
+    if (newlyDelivered.length > 0) {
+      void checkAchievements(orgId);
+    }
+  }
 
   // AdTrack: шлём изменение только тем заказам, у кого статус реально менялся.
   for (const o of orders) {

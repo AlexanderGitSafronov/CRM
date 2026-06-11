@@ -7,6 +7,12 @@ import { getNextManagerId } from '../services/roundRobin';
 import { checkAchievements } from '../services/achievements';
 import { sendOrderStatusToAdtrack } from '../services/adtrackWebhook';
 import { AuthRequest } from '../middleware/auth';
+import {
+  assertOrderQuota,
+  createOrderWithOrderNumRetry,
+  filterOrgProductIds,
+  validateOrderItems,
+} from '../services/orderGuards';
 
 /**
  * Безопасно извлекает строковое значение из nested-объекта payload.
@@ -63,6 +69,17 @@ export const receiveOrder = async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'items array required' });
   }
 
+  const itemsCheck = validateOrderItems(items);
+  if (!itemsCheck.ok) {
+    return res.status(400).json({ error: itemsCheck.error });
+  }
+
+  // Plan limit: заказы за текущий календарный месяц
+  const quota = await assertOrderQuota(orgId);
+  if (!quota.ok) {
+    return res.status(402).json({ error: `Досягнуто ліміт замовлень тарифу: максимум ${quota.max} замовлень на місяць. Оновіть план.` });
+  }
+
   // Захват атрибуции (fbclid/utm/...) — приходит из Magaz/лендингов через AdTrack tracker.js cookie.
   // Все поля опциональные: если ничего не передано — заказ создаётся без них, AdTrack просто не свяжет
   // его с креативом, но интеграция всё равно работает.
@@ -103,6 +120,8 @@ export const receiveOrder = async (req: Request, res: Response) => {
     });
   }
 
+  const customerId = dbCustomer.id;
+
   const blacklistWarning = dbCustomer.isBlacklisted
     ? `⚠️ ЧОРНИЙ СПИСОК: ${dbCustomer.blacklistReason || 'без причини'}`
     : null;
@@ -112,60 +131,63 @@ export const receiveOrder = async (req: Request, res: Response) => {
     0
   );
 
-  const lastOrder = await prisma.order.findFirst({
-    where: { organizationId: orgId },
-    orderBy: { orderNum: 'desc' },
-    select: { orderNum: true },
-  });
-  const orderNum = (lastOrder?.orderNum ?? 0) + 1;
-
   const autoManagerId = await getNextManagerId(orgId);
 
-  const order = await prisma.order.create({
-    data: {
-      organizationId: orgId,
-      orderNum,
-      customerId: dbCustomer.id,
-      managerId: autoManagerId,
-      source,
-      comment: [blacklistWarning, comment?.trim()].filter(Boolean).join('\n') || null,
-      total,
-      deliveryService: delivery?.service?.trim() || null,
-      deliveryCity: delivery?.city?.trim() || null,
-      deliveryAddress: delivery?.address?.trim() || null,
-      recipientName: delivery?.recipientName?.trim() || null,
-      utmSource,
-      utmMedium,
-      utmCampaign,
-      utmContent,
-      utmTerm,
-      fbclid,
-      ttclid,
-      gclid,
-      customerIp,
-      customerUserAgent,
-      items: {
-        create: items.map((item: {
-          name: string;
-          quantity: number;
-          price: number;
-          productId?: string;
-        }) => ({
-          name: item.name,
-          quantity: item.quantity,
-          price: item.price,
-          productId: item.productId || null,
-        })),
+  // productId от внешних магазинов могут быть чужими/устаревшими — заказ не отклоняем,
+  // просто обнуляем неизвестные productId.
+  const requestedProductIds = items
+    .map((item) => item.productId)
+    .filter((pid): pid is string => Boolean(pid));
+  const orgProductIds = await filterOrgProductIds(orgId, requestedProductIds);
+
+  // orderNum генерируется не атомарно — при гонке retry пересчитает номер (см. orderGuards)
+  const order = await createOrderWithOrderNumRetry(orgId, (orderNum) =>
+    prisma.order.create({
+      data: {
+        organizationId: orgId,
+        orderNum,
+        customerId,
+        managerId: autoManagerId,
+        source,
+        comment: [blacklistWarning, comment?.trim()].filter(Boolean).join('\n') || null,
+        total,
+        deliveryService: delivery?.service?.trim() || null,
+        deliveryCity: delivery?.city?.trim() || null,
+        deliveryAddress: delivery?.address?.trim() || null,
+        recipientName: delivery?.recipientName?.trim() || null,
+        utmSource,
+        utmMedium,
+        utmCampaign,
+        utmContent,
+        utmTerm,
+        fbclid,
+        ttclid,
+        gclid,
+        customerIp,
+        customerUserAgent,
+        items: {
+          create: items.map((item: {
+            name: string;
+            quantity: number;
+            price: number;
+            productId?: string;
+          }) => ({
+            name: item.name,
+            quantity: item.quantity,
+            price: item.price,
+            productId: item.productId && orgProductIds.has(item.productId) ? item.productId : null,
+          })),
+        },
+        history: {
+          create: { action: 'CREATED', newValue: 'NEW' },
+        },
       },
-      history: {
-        create: { action: 'CREATED', newValue: 'NEW' },
+      include: {
+        customer: { select: { name: true, phone: true } },
+        items: { select: { name: true, quantity: true, price: true } },
       },
-    },
-    include: {
-      customer: { select: { name: true, phone: true } },
-      items: { select: { name: true, quantity: true, price: true } },
-    },
-  });
+    })
+  );
 
   broadcastEvent(orgId, 'new_order', { orderNum: order.orderNum, source });
 

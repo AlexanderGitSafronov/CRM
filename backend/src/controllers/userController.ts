@@ -88,15 +88,30 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
   const { name, email, role, active, password } = req.body;
 
   // Verify the user belongs to the same org
-  const target = await prisma.user.findFirst({ where: { id, organizationId: orgId }, select: { id: true } });
+  const target = await prisma.user.findFirst({
+    where: { id, organizationId: orgId },
+    select: { id: true, role: true, active: true },
+  });
   if (!target) return res.status(404).json({ error: 'User not found' });
 
-  if (id === req.user?.id && role && role !== 'ADMIN' && req.user.role === 'ADMIN') {
-    const adminCount = await prisma.user.count({
-      where: { organizationId: orgId, role: 'ADMIN', active: true },
+  if (role) {
+    const validRoles = ['ADMIN', 'MANAGER', 'VIEWER', 'CALL_CENTER'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
+  }
+
+  // Last-admin lockout guard: don't allow deactivating or demoting the only active ADMIN
+  const losesAdmin =
+    target.role === 'ADMIN' &&
+    target.active &&
+    ((active !== undefined && !Boolean(active)) || (role && role !== 'ADMIN'));
+  if (losesAdmin) {
+    const otherAdmins = await prisma.user.count({
+      where: { organizationId: orgId, role: 'ADMIN', active: true, id: { not: id } },
     });
-    if (adminCount <= 1) {
-      return res.status(400).json({ error: 'Cannot remove the last admin' });
+    if (otherAdmins === 0) {
+      return res.status(400).json({ error: 'Не можна деактивувати останнього адміністратора' });
     }
   }
 
@@ -132,7 +147,7 @@ export const deleteUser = async (req: AuthRequest, res: Response) => {
   const user = await prisma.user.findFirst({ where: { id, organizationId: orgId } });
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  await prisma.order.updateMany({ where: { managerId: id }, data: { managerId: null } });
+  await prisma.order.updateMany({ where: { managerId: id, organizationId: orgId }, data: { managerId: null } });
 
   await prisma.user.delete({ where: { id } });
 

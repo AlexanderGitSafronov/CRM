@@ -3,6 +3,14 @@ import { stringify } from 'csv-stringify/sync';
 import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 
+// Защита от CSV formula injection: ячейка, начинающаяся с = + - @ или таба,
+// исполняется Excel'ем как формула. Префиксуем одинарной кавычкой —
+// Excel покажет значение как текст. Кавычки/запятые экранирует csv-stringify.
+const csvCell = (value: unknown): string => {
+  const s = value == null ? '' : String(value);
+  return /^[=+\-@\t]/.test(s) ? `'${s}` : s;
+};
+
 export const exportOrders = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const { status, dateFrom, dateTo, format = 'csv' } = req.query as Record<string, string>;
@@ -42,17 +50,17 @@ export const exportOrders = async (req: AuthRequest, res: Response) => {
   const rows = orders.map((o) => ({
     '№ заказа': o.orderNum,
     'Дата создания': o.createdAt.toLocaleString('uk-UA'),
-    'Клиент': o.customer.name,
-    'Телефон': o.customer.phone,
-    'Email': o.customer.email || '',
-    'Город': o.customer.city || '',
-    'Товары': o.items.map((i) => `${i.name} x${i.quantity}`).join('; '),
+    'Клиент': csvCell(o.customer.name),
+    'Телефон': csvCell(o.customer.phone),
+    'Email': csvCell(o.customer.email || ''),
+    'Город': csvCell(o.customer.city || ''),
+    'Товары': csvCell(o.items.map((i) => `${i.name} x${i.quantity}`).join('; ')),
     'Кол-во': o.items.reduce((s, i) => s + i.quantity, 0),
     'Сумма': o.total,
     'Статус': STATUS_LABELS[o.status] || o.status,
     'Источник': SOURCE_LABELS[o.source] || o.source,
-    'Менеджер': o.manager?.name || '',
-    'Комментарий': o.comment || '',
+    'Менеджер': csvCell(o.manager?.name || ''),
+    'Комментарий': csvCell(o.comment || ''),
   }));
 
   if (format === 'json') {
@@ -104,7 +112,7 @@ export const exportFinances = async (req: AuthRequest, res: Response) => {
     'Тип': 'Расход',
     'Дата': new Date(e.date).toLocaleDateString('uk-UA'),
     'Категория/Источник': EXPENSE_LABELS[e.category] || e.category,
-    'Описание': e.description || '',
+    'Описание': csvCell(e.description || ''),
     'Сумма': -e.amount,
   }));
 
@@ -112,7 +120,7 @@ export const exportFinances = async (req: AuthRequest, res: Response) => {
     'Тип': 'Доход',
     'Дата': o.createdAt.toLocaleDateString('uk-UA'),
     'Категория/Источник': o.source,
-    'Описание': `Замовлення #${o.orderNum} — ${o.customer.name}`,
+    'Описание': csvCell(`Замовлення #${o.orderNum} — ${o.customer.name}`),
     'Сумма': o.total,
   }));
 

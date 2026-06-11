@@ -42,6 +42,14 @@ router.post('/', requireRole('ADMIN', 'MANAGER', 'CALL_CENTER'), async (req: Aut
 
   if (!order) return res.status(404).json({ error: 'Заказ не найден' });
 
+  if (managerId) {
+    const manager = await prisma.user.findFirst({
+      where: { id: managerId, organizationId: orgId },
+      select: { id: true },
+    });
+    if (!manager) return res.status(400).json({ error: 'Invalid managerId' });
+  }
+
   const assignedManagerId = managerId || order.managerId || req.user?.id;
 
   const callback = await prisma.callback.create({

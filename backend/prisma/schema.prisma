@@ -119,6 +119,7 @@ model User {
   avatar         String?
   active         Boolean  @default(true)
   emailVerified  Boolean  @default(false)
+  passwordChangedAt DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

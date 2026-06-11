@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import prisma from '../services/prisma';
 import { answerCallbackQuery } from '../services/telegram';
 import { sendOrderStatusByIdToAdtrack } from '../services/adtrackWebhook';
@@ -41,7 +42,23 @@ router.post('/webhook', async (req: Request, res: Response) => {
       where: { organizationId_type: { organizationId: order.organizationId, type: 'TELEGRAM' } },
     });
     if (!tg?.active) return;
-    const cfg = JSON.parse(tg.config) as { botToken: string };
+    const cfg = JSON.parse(tg.config) as { botToken: string; webhookSecret?: string };
+
+    // Проверяем подлинность ДО любых изменений состояния.
+    // Telegram присылает secret_token (заданный в setWebhook) в этом заголовке.
+    if (cfg.webhookSecret) {
+      const provided = req.get('x-telegram-bot-api-secret-token') ?? '';
+      const expected = Buffer.from(cfg.webhookSecret);
+      const actual = Buffer.from(provided);
+      const valid = expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+      if (!valid) {
+        logger.warn(`Telegram webhook secret mismatch for org ${order.organizationId}, ignoring update`);
+        return;
+      }
+    } else {
+      // Легаси-интеграция: set-webhook ещё не перезапускали с secret_token.
+      logger.warn(`Telegram webhook without secret configured for org ${order.organizationId}`);
+    }
 
     if (action === 'confirm') {
       await prisma.order.update({ where: { id: orderId }, data: { status: 'CONFIRMED' } });
@@ -86,14 +103,23 @@ router.post('/set-webhook', authenticate, requireRole('ADMIN'), async (req: Auth
   });
   if (!tg?.active) return res.status(400).json({ error: 'Telegram не налаштований' });
 
-  const cfg = JSON.parse(tg.config) as { botToken: string };
+  const cfg = JSON.parse(tg.config) as { botToken: string; webhookSecret?: string };
   try {
+    // secret_token: Telegram будет присылать его в заголовке
+    // x-telegram-bot-api-secret-token каждого апдейта — /webhook сверяет его.
+    const secret = crypto.randomBytes(32).toString('hex');
     const r = await fetch(`https://api.telegram.org/bot${cfg.botToken}/setWebhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: `${webhookUrl}/api/telegram/webhook` }),
+      body: JSON.stringify({ url: `${webhookUrl}/api/telegram/webhook`, secret_token: secret }),
     });
     const data = await r.json() as { ok: boolean; description?: string };
+    if (data.ok) {
+      await prisma.integration.update({
+        where: { organizationId_type: { organizationId: orgId, type: 'TELEGRAM' } },
+        data: { config: JSON.stringify({ ...cfg, webhookSecret: secret }) },
+      });
+    }
     return res.json(data);
   } catch (err) {
     logger.error('Set webhook error:', err);

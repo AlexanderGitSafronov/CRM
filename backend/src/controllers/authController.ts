@@ -48,8 +48,12 @@ const issueToken = (user: { id: string; email: string; role: string; name: strin
   jwt.sign(
     { id: user.id, email: user.email, role: user.role, name: user.name, organizationId: user.organizationId },
     JWT_SECRET(),
-    { expiresIn: JWT_EXPIRES_IN }
+    { expiresIn: JWT_EXPIRES_IN, algorithm: 'HS256' }
   );
+
+// Real bcrypt hash of a random string — compared against when the user is missing
+// or inactive so login timing doesn't reveal whether the email exists.
+const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 10);
 
 const userResponse = (
   user: { id: string; name: string; email: string; role: string; avatar: string | null; emailVerified: boolean; organizationId: string },
@@ -186,15 +190,19 @@ export const login = async (req: Request, res: Response) => {
   });
 
   if (!user || !user.active) {
+    // Equalize timing with the bcrypt.compare path below (anti-enumeration)
+    await bcrypt.compare(password, DUMMY_HASH);
     return res.status(401).json({ error: 'Невірний email або пароль' });
-  }
-  if (!user.organization.active) {
-    return res.status(403).json({ error: 'Воркспейс призупинено' });
   }
 
   const isValid = await bcrypt.compare(password, user.password);
   if (!isValid) {
     return res.status(401).json({ error: 'Невірний email або пароль' });
+  }
+
+  // Only reveal suspension status after the password is verified
+  if (!user.organization.active) {
+    return res.status(403).json({ error: 'Воркспейс призупинено' });
   }
 
   const token = issueToken({
@@ -261,7 +269,7 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
   const hashed = await bcrypt.hash(newPassword, 10);
   await prisma.user.update({
     where: { id: req.user!.id },
-    data: { password: hashed },
+    data: { password: hashed, passwordChangedAt: new Date() },
   });
 
   return res.json({ message: 'Password changed successfully' });
@@ -319,7 +327,7 @@ export const resetPassword = async (req: Request, res: Response) => {
 
   const hashed = await bcrypt.hash(password, 10);
   await prisma.$transaction([
-    prisma.user.update({ where: { id: reset.userId }, data: { password: hashed } }),
+    prisma.user.update({ where: { id: reset.userId }, data: { password: hashed, passwordChangedAt: new Date() } }),
     prisma.passwordReset.update({ where: { id: reset.id }, data: { consumedAt: new Date() } }),
   ]);
 

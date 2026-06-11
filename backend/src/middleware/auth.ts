@@ -29,24 +29,30 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       return res.status(401).json({ error: 'Unauthorized: No token provided' });
     }
 
-    const decoded = jwt.verify(token, getJwtSecret()) as {
+    const decoded = jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] }) as {
       id: string;
       email: string;
       role: string;
       name: string;
       organizationId?: string;
+      iat?: number;
     };
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
       select: {
         id: true, email: true, role: true, name: true, active: true, organizationId: true,
+        passwordChangedAt: true,
         organization: { select: { active: true } },
       },
     });
 
     if (!user || !user.active) {
       return res.status(401).json({ error: 'Unauthorized: User not found or inactive' });
+    }
+    // Invalidate tokens issued before the last password change
+    if (user.passwordChangedAt && decoded.iat && decoded.iat < Math.floor(user.passwordChangedAt.getTime() / 1000)) {
+      return res.status(401).json({ error: 'Сесію завершено, увійдіть знову' });
     }
     if (!user.organization?.active) {
       return res.status(403).json({ error: 'Workspace is suspended' });

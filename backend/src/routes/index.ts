@@ -20,6 +20,7 @@ import importRoutes from './import';
 import achievementRoutes from './achievements';
 import goalsRoutes from './goals';
 import orderViewsRoutes from './orderViews';
+import cronRoutes from './cron';
 
 const router = Router();
 
@@ -44,5 +45,6 @@ router.use('/import', importRoutes);
 router.use('/achievements', achievementRoutes);
 router.use('/goals', goalsRoutes);
 router.use('/order-views', orderViewsRoutes);
+router.use('/cron', cronRoutes);
 
 export default router;
