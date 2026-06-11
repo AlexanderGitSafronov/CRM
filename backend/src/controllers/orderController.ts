@@ -4,7 +4,7 @@ import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { notifyNewOrder, logActivity } from '../services/notifications';
 import { broadcastEvent } from '../services/eventBus';
-import { sendIncomeToRashod } from '../services/rashodWebhook';
+import { sendIncomeToRashod, reverseIncomeToRashod } from '../services/rashodWebhook';
 import { sendOrderStatusByIdToAdtrack } from '../services/adtrackWebhook';
 import { getNextManagerId } from '../services/roundRobin';
 import { checkAchievements } from '../services/achievements';
@@ -368,7 +368,10 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
 
   const existing = await prisma.order.findFirst({
     where: { id, organizationId: orgId },
-    select: { status: true, managerId: true, orderNum: true, shippedAt: true, deliveredAt: true, returnedAt: true },
+    select: {
+      status: true, managerId: true, orderNum: true, total: true, source: true,
+      shippedAt: true, deliveredAt: true, returnedAt: true, rashodReversedAt: true,
+    },
   });
 
   if (!existing) {
@@ -384,6 +387,11 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
 
   const updateData: Record<string, unknown> = {};
 
+  // Реверс дохода: выкупленный заказ (deliveredAt != null) уходит в RETURNED/CANCELLED
+  // и ещё не реверсился (rashodReversedAt == null). Решение принимаем здесь, чтобы
+  // штамп rashodReversedAt лёг в тот же апдейт; сам вебхук шлём после транзакции.
+  let shouldReverseIncome = false;
+
   if (status && status !== existing.status) {
     const validStatuses = ['NEW', 'PROCESSING', 'CONFIRMED', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'RETURNED', 'CALLED', 'NO_ANSWER'];
     if (!validStatuses.includes(status)) {
@@ -392,6 +400,14 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     updateData.status = status;
     // Реальные даты жизненного цикла (честные деньги): отгрузка/выкуп/возврат.
     Object.assign(updateData, applyStatusTimestamps(status, existing));
+    if (
+      (status === 'RETURNED' || status === 'CANCELLED') &&
+      existing.deliveredAt != null &&
+      existing.rashodReversedAt == null
+    ) {
+      shouldReverseIncome = true;
+      updateData.rashodReversedAt = new Date();
+    }
     historyEntries.push({
       action: 'STATUS_CHANGED',
       oldValue: existing.status,
@@ -481,6 +497,7 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
   // сохранение уже DELIVERED заказа дублировало бы доход в Rashod.
   if (statusChanged && status === 'DELIVERED') {
     sendIncomeToRashod({
+      organizationId: orgId,
       orderId: id,
       orderNum: order.orderNum,
       total: order.total,
@@ -489,6 +506,20 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     }).catch(() => {});
     broadcastEvent(orgId, 'order_delivered', { orderNum: order.orderNum, total: order.total });
     void checkAchievements(orgId);
+  }
+
+  // Реверс ранее признанного дохода при возврате/отмене выкупленного заказа.
+  // Штамп rashodReversedAt уже записан в апдейте выше; вебхук — fire-and-forget,
+  // его сбой не должен ломать смену статуса.
+  if (shouldReverseIncome) {
+    reverseIncomeToRashod({
+      organizationId: orgId,
+      orderId: id,
+      orderNum: order.orderNum,
+      total: existing.total,
+      source: order.source,
+      returnedAt: new Date(),
+    }).catch(() => {});
   }
 
   // AdTrack: шлём любое релевантное изменение статуса. Сервис сам игнорит
@@ -672,7 +703,7 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
 
   const orders = await prisma.order.findMany({
     where: { id: { in: ids }, organizationId: orgId },
-    select: { id: true, status: true, orderNum: true, total: true, source: true, shippedAt: true, deliveredAt: true, returnedAt: true },
+    select: { id: true, status: true, orderNum: true, total: true, source: true, shippedAt: true, deliveredAt: true, returnedAt: true, rashodReversedAt: true },
   });
 
   await prisma.order.updateMany({
@@ -716,6 +747,7 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
     const newlyDelivered = orders.filter((o) => o.status !== 'DELIVERED');
     for (const o of newlyDelivered) {
       sendIncomeToRashod({
+        organizationId: orgId,
         orderId: o.id,
         orderNum: o.orderNum,
         total: o.total,
@@ -725,6 +757,37 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
     }
     if (newlyDelivered.length > 0) {
       void checkAchievements(orgId);
+    }
+  }
+
+  // RETURNED/CANCELLED через bulk: реверсим доход тем заказам, что были выкуплены
+  // (deliveredAt != null) и ещё не реверсились (rashodReversedAt == null).
+  // Штампуем rashodReversedAt одним updateMany и шлём негативный вебхук
+  // fire-and-forget. Любой сбой реверса не ломает массовую смену статуса.
+  if (status === 'RETURNED' || status === 'CANCELLED') {
+    const toReverse = orders.filter(
+      (o) => o.status !== status && o.deliveredAt != null && o.rashodReversedAt == null,
+    );
+    if (toReverse.length > 0) {
+      try {
+        await prisma.order.updateMany({
+          where: { id: { in: toReverse.map((o) => o.id) }, organizationId: orgId },
+          data: { rashodReversedAt: new Date() },
+        });
+        for (const o of toReverse) {
+          reverseIncomeToRashod({
+            organizationId: orgId,
+            orderId: o.id,
+            orderNum: o.orderNum,
+            total: o.total,
+            source: o.source,
+            returnedAt: new Date(),
+          }).catch(() => {});
+        }
+      } catch {
+        // Реверс не критичен для смены статуса — намеренно глотаем,
+        // массовая смена статуса уже применена выше.
+      }
     }
   }
 

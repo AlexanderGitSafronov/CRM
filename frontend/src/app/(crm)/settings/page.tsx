@@ -253,6 +253,15 @@ export default function SettingsPage() {
   const [savingAdtrack, setSavingAdtrack] = useState(false);
   const [testingAdtrack, setTestingAdtrack] = useState(false);
 
+  // Rashod (per-org income/expense accounting integration — mirrors AdTrack pattern)
+  const [rashodConfig, setRashodConfig] = useState({
+    token: '',
+    baseUrl: '',
+    active: false,
+  });
+  const [savingRashod, setSavingRashod] = useState(false);
+  const [testingRashod, setTestingRashod] = useState(false);
+
   // NP Tracker status
   interface TrackerStatus {
     isRunning: boolean;
@@ -365,6 +374,19 @@ export default function SettingsPage() {
             webhookSecret: (cfg.webhookSecret || '') as string,
             baseUrl: cfg.baseUrl || 'https://adtrack-backend.vercel.app',
             active: adt.active,
+          });
+        }
+        const rashod = ints.find((i) => i.type === 'RASHOD');
+        if (rashod) {
+          const cfg = JSON.parse(rashod.config);
+          // Бэк возвращает token уже маскированным как «•••••…» длиной
+          // равной оригинальному ключу — рендерим как есть. Если юзер начнёт
+          // печатать — заменит маску своим текстом. При Save пустое поле ИЛИ
+          // чистая bullet-строка не отправляются (backend оставит существующий).
+          setRashodConfig({
+            token: (cfg.token || '') as string,
+            baseUrl: cfg.baseUrl || '',
+            active: rashod.active,
           });
         }
       } catch {}
@@ -650,6 +672,76 @@ export default function SettingsPage() {
       toast.error(`AdTrack: ${msg}`);
     }
     setTestingAdtrack(false);
+  };
+
+  // Строит config для PUT Rashod.
+  // token отправляется только если юзер реально ввёл новый.
+  // Пустое поле ИЛИ строка из одних • = «не менять» (backend оставит существующий).
+  const buildRashodConfig = () => {
+    const cfg: Record<string, string> = {
+      baseUrl: rashodConfig.baseUrl.trim(),
+    };
+    const s = rashodConfig.token;
+    if (s && !/^[•·]+$/.test(s)) cfg.token = s.trim();
+    return cfg;
+  };
+
+  const handleSaveRashod = async () => {
+    setSavingRashod(true);
+    try {
+      await api.put('/integrations/RASHOD', {
+        config: buildRashodConfig(),
+        active: rashodConfig.active,
+      });
+      // После save обновляем поле на новую маску (• × длина нового ключа),
+      // если юзер действительно ввёл новый токен.
+      const s = rashodConfig.token;
+      const isNew = s && !/^[•·]+$/.test(s);
+      if (isNew) {
+        setRashodConfig((p) => ({ ...p, token: '•'.repeat(s.length) }));
+      }
+      toast.success('Rashod збережено');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+      toast.error(msg);
+    }
+    setSavingRashod(false);
+  };
+
+  // Авто-сохранение при клике на тогл Активна — не требует жать «Зберегти».
+  const toggleRashodActive = async () => {
+    const next = !rashodConfig.active;
+    setRashodConfig((p) => ({ ...p, active: next }));
+    try {
+      await api.put('/integrations/RASHOD', {
+        config: buildRashodConfig(),
+        active: next,
+      });
+      toast.success(next ? 'Rashod увімкнено' : 'Rashod вимкнено');
+    } catch (err: unknown) {
+      setRashodConfig((p) => ({ ...p, active: !next }));
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+      toast.error(msg);
+    }
+  };
+
+  const handleTestRashod = async () => {
+    setTestingRashod(true);
+    try {
+      const s = rashodConfig.token;
+      // Если в поле сейчас маска из точек (юзер не вводил) — не шлём её на бэк,
+      // бэк сам подтянет реальный токен из БД для теста.
+      const realToken = s && !/^[•·]+$/.test(s) ? s.trim() : '';
+      await api.post('/integrations/rashod/test', {
+        token: realToken,
+        baseUrl: rashodConfig.baseUrl.trim(),
+      });
+      toast.success('Rashod працює — з\'єднання успішне');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Помилка';
+      toast.error(`Rashod: ${msg}`);
+    }
+    setTestingRashod(false);
   };
 
   const ROLE_LABELS = { ADMIN: 'Администратор', MANAGER: 'Менеджер', VIEWER: 'Просмотр', CALL_CENTER: 'Колл-центр' };
@@ -1248,6 +1340,72 @@ export default function SettingsPage() {
                 className="btn-secondary"
               >
                 {testingAdtrack ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400" /> : 'Тест'}
+              </button>
+            </div>
+          </div>
+
+          {/* Rashod — per-org income/expense accounting */}
+          <div className="card p-5">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-teal-600 flex items-center justify-center shrink-0">
+                <FileText className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 className="font-semibold text-gray-900 dark:text-white">Rashod (облік доходів/витрат)</h2>
+                <p className="text-xs text-gray-400">
+                  Синхронізує доходи та витрати по замовленнях у зовнішній сервіс обліку. Опціонально.
+                </p>
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <div
+                    className={`relative w-10 h-5 rounded-full transition-colors ${rashodConfig.active ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+                    onClick={toggleRashodActive}
+                  >
+                    <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${rashodConfig.active ? 'translate-x-5' : ''}`} />
+                  </div>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
+                    {rashodConfig.active ? 'Увімкнено' : 'Вимкнено'}
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="label">API токен</label>
+                <input
+                  className="input font-mono text-sm"
+                  type="password"
+                  value={rashodConfig.token}
+                  onChange={(e) => setRashodConfig((p) => ({ ...p, token: e.target.value }))}
+                  placeholder="token з Rashod → Налаштування → API"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Видно в Rashod: Налаштування → секція «API» → кнопка «Показати токен»
+                </p>
+              </div>
+              <div>
+                <label className="label">Backend URL</label>
+                <input
+                  className="input font-mono text-sm"
+                  value={rashodConfig.baseUrl}
+                  onChange={(e) => setRashodConfig((p) => ({ ...p, baseUrl: e.target.value }))}
+                  placeholder="https://rashod-backend.vercel.app"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-4">
+              <button onClick={handleSaveRashod} disabled={savingRashod} className="btn-primary">
+                {savingRashod ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" /> : 'Зберегти'}
+              </button>
+              <button
+                onClick={handleTestRashod}
+                disabled={testingRashod || !rashodConfig.baseUrl || !rashodConfig.token}
+                className="btn-secondary"
+              >
+                {testingRashod ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400" /> : 'Перевірити'}
               </button>
             </div>
           </div>

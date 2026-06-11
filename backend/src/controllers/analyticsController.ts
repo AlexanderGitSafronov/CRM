@@ -153,7 +153,31 @@ export const getRevenueByProduct = async (req: AuthRequest, res: Response) => {
     ...(Object.keys(dateFilter).length ? { returnedAt: dateFilter } : {}),
   };
 
-  const [deliveredItems, returnedItems] = await Promise.all([
+  // Build the immediately-preceding equal-length window (for trendPct). We only
+  // compare the realized-revenue side (DELIVERED by deliveredAt), since that's
+  // the money number the verdict cares about. If either bound is missing we can't
+  // define a prior period, so trendPct stays null for every product.
+  let prevDeliveredFilter:
+    | { organizationId: string; status: string; deliveredAt: { gte: Date; lte: Date } }
+    | null = null;
+  if (dateFrom && dateTo) {
+    const from = new Date(dateFrom);
+    const to = new Date(dateTo);
+    const fromMs = from.getTime();
+    const toMs = to.getTime();
+    if (Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs >= fromMs) {
+      const periodMs = toMs - fromMs;
+      const prevFrom = new Date(fromMs - periodMs - 1);
+      const prevTo = new Date(fromMs - 1);
+      prevDeliveredFilter = {
+        organizationId: orgId,
+        status: 'DELIVERED',
+        deliveredAt: { gte: prevFrom, lte: prevTo },
+      };
+    }
+  }
+
+  const [deliveredItems, returnedItems, prevDeliveredItems] = await Promise.all([
     prisma.orderItem.findMany({
       where: {
         order: deliveredOrderFilter,
@@ -172,6 +196,12 @@ export const getRevenueByProduct = async (req: AuthRequest, res: Response) => {
       },
       select: { name: true, quantity: true, productId: true },
     }),
+    prevDeliveredFilter
+      ? prisma.orderItem.findMany({
+          where: { order: prevDeliveredFilter },
+          select: { name: true, quantity: true, price: true, productId: true },
+        })
+      : Promise.resolve([] as { name: string; quantity: number; price: number; productId: string | null }[]),
   ]);
 
   type ProductRow = {
@@ -182,6 +212,9 @@ export const getRevenueByProduct = async (req: AuthRequest, res: Response) => {
     profit: number;
     returned: number;
     redemptionRate: number;
+    marginPerUnit: number;
+    trendPct: number | null;
+    verdict: 'scale' | 'optimize' | 'disable';
   };
 
   const byProduct: Record<string, ProductRow> = {};
@@ -189,9 +222,12 @@ export const getRevenueByProduct = async (req: AuthRequest, res: Response) => {
   deliveredItems.forEach((item) => {
     const key = item.productId || item.name;
     if (!byProduct[key]) {
-      byProduct[key] = { name: item.name, revenue: 0, quantity: 0, cost: 0, profit: 0, returned: 0, redemptionRate: 100 };
+      byProduct[key] = {
+        name: item.name, revenue: 0, quantity: 0, cost: 0, profit: 0, returned: 0,
+        redemptionRate: 100, marginPerUnit: 0, trendPct: null, verdict: 'optimize',
+      };
     }
-    const purchasePrice = item.product?.purchasePrice ?? 0;
+    const purchasePrice = Number.isFinite(item.product?.purchasePrice) ? (item.product?.purchasePrice ?? 0) : 0;
     byProduct[key].revenue += item.price * item.quantity;
     byProduct[key].quantity += item.quantity;
     byProduct[key].cost += purchasePrice * item.quantity;
@@ -203,9 +239,42 @@ export const getRevenueByProduct = async (req: AuthRequest, res: Response) => {
     if (byProduct[key]) byProduct[key].returned += item.quantity;
   });
 
-  Object.values(byProduct).forEach((p) => {
+  // Prior-period revenue per product (delivered side only), used for trendPct.
+  const prevRevenue: Record<string, number> = {};
+  prevDeliveredItems.forEach((item) => {
+    const key = item.productId || item.name;
+    const rev = item.price * item.quantity;
+    if (Number.isFinite(rev)) prevRevenue[key] = (prevRevenue[key] ?? 0) + rev;
+  });
+
+  Object.entries(byProduct).forEach(([key, p]) => {
     const total = p.quantity + p.returned;
     p.redemptionRate = total > 0 ? Math.round((p.quantity / total) * 100 * 10) / 10 : 100;
+
+    // Margin after returns, per delivered unit. profit already nets only delivered
+    // items; divide by delivered quantity (guard zero).
+    const deliveredQty = Math.max(p.quantity, 1);
+    const margin = p.profit / deliveredQty;
+    p.marginPerUnit = Number.isFinite(margin) ? Math.round(margin * 100) / 100 : 0;
+
+    // trendPct: revenue change % vs the prior equal-length window. Null if no prior
+    // data (can't compute a meaningful % off a zero/absent baseline).
+    const prevRev = prevRevenue[key];
+    if (prevDeliveredFilter && Number.isFinite(prevRev) && (prevRev ?? 0) > 0) {
+      const change = ((p.revenue - (prevRev as number)) / (prevRev as number)) * 100;
+      p.trendPct = Number.isFinite(change) ? Math.round(change * 10) / 10 : null;
+    } else {
+      p.trendPct = null;
+    }
+
+    // Owner-facing verdict.
+    if (p.profit > 0 && p.redemptionRate >= 70) {
+      p.verdict = 'scale';
+    } else if (p.profit <= 0 || p.redemptionRate < 50) {
+      p.verdict = 'disable';
+    } else {
+      p.verdict = 'optimize';
+    }
   });
 
   const sorted = Object.values(byProduct).sort((a, b) => b.revenue - a.revenue).slice(0, parseInt(limit));
@@ -825,7 +894,7 @@ export const getKpi = async (req: AuthRequest, res: Response) => {
 
   const [
     todayOrders, todayRevenue, monthOrders, monthRevenue, monthExpenses,
-    inTransit, delivered30, returned30, pendingCallbacks, weeklyOrders, newOrders,
+    inTransitOrders, inTransitAgg, delivered30, returned30, pendingCallbacks, weeklyOrders, newOrders,
   ] = await Promise.all([
     prisma.order.count({ where: { ...orgFilter, createdAt: { gte: todayStart } } }),
     // Realized revenue: only DELIVERED orders, attributed by deliveredAt (not createdAt).
@@ -843,6 +912,12 @@ export const getKpi = async (req: AuthRequest, res: Response) => {
       _sum: { amount: true },
     }),
     prisma.order.count({ where: { ...orgFilter, status: 'SHIPPED' } }),
+    // In-transit money snapshot: sum(total) of SHIPPED orders that actually have a TTN
+    // (trackingNumber). These are the COD parcels whose cash is still on the road.
+    prisma.order.aggregate({
+      where: { ...orgFilter, status: 'SHIPPED', trackingNumber: { not: null } },
+      _sum: { total: true },
+    }),
     // Realized outcomes for redemption rate: delivered by deliveredAt, returned by returnedAt.
     prisma.order.count({ where: { ...orgFilter, deliveredAt: { gte: thirtyDaysAgo }, status: 'DELIVERED' } }),
     prisma.order.count({ where: { ...orgFilter, returnedAt: { gte: thirtyDaysAgo }, status: 'RETURNED' } }),
@@ -855,6 +930,7 @@ export const getKpi = async (req: AuthRequest, res: Response) => {
   const monthExpensesVal = monthExpenses._sum.amount ?? 0;
   const resolved = delivered30 + returned30;
   const redemptionRate = resolved > 0 ? Math.round((delivered30 / resolved) * 100 * 10) / 10 : null;
+  const inTransitSum = inTransitAgg._sum.total ?? 0;
 
   return res.json({
     today: { orders: todayOrders, revenue: todayRevenue._sum.total ?? 0 },
@@ -862,6 +938,159 @@ export const getKpi = async (req: AuthRequest, res: Response) => {
       orders: monthOrders, revenue: monthRevenueVal, expenses: monthExpensesVal,
       profit: monthRevenueVal - monthExpensesVal,
     },
-    inTransit, newOrders, redemptionRate, delivered30, returned30, pendingCallbacks, weeklyOrders,
+    // inTransit is now the money-in-transit total (sum of SHIPPED-with-TTN order totals),
+    // matching /cash-in-transit's inTransitTotal. inTransitOrders keeps the old SHIPPED count.
+    inTransit: Number.isFinite(inTransitSum) ? inTransitSum : 0,
+    inTransitOrders, newOrders, redemptionRate, delivered30, returned30, pendingCallbacks, weeklyOrders,
+  });
+};
+
+// GET /api/analytics/returns-cost — the real cost of returns (возвраты) in a window.
+// Windowed by returnedAt (the realized return date). Money lost = round-trip shipping
+// the seller eats + COGS frozen in the товар that came back.
+export const getReturnsCost = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const { from, to } = req.query as Record<string, string>;
+  const dateFilter = dateRange(from, to);
+  const returnedFilter = {
+    organizationId: orgId,
+    status: 'RETURNED',
+    ...(Object.keys(dateFilter).length ? { returnedAt: dateFilter } : {}),
+  };
+
+  const orders = await prisma.order.findMany({
+    where: returnedFilter,
+    select: {
+      shippingCost: true,
+      source: true,
+      items: {
+        select: {
+          name: true,
+          quantity: true,
+          productId: true,
+          product: { select: { name: true, purchasePrice: true } },
+        },
+      },
+    },
+  });
+
+  const totalReturns = orders.length;
+
+  let lostShipping = 0;
+  let frozenCogs = 0;
+  const byProductMap: Record<string, { name: string; count: number; frozenCogs: number }> = {};
+  const bySourceMap: Record<string, { source: string; count: number }> = {};
+
+  for (const o of orders) {
+    // Round-trip: the seller pays to ship out and to ship the return back. Treat a
+    // missing/non-finite shippingCost as 0.
+    const ship = Number.isFinite(o.shippingCost) ? (o.shippingCost ?? 0) : 0;
+    lostShipping += ship * 2;
+
+    const src = (o.source || '').trim() || 'UNKNOWN';
+    if (!bySourceMap[src]) bySourceMap[src] = { source: src, count: 0 };
+    bySourceMap[src].count++;
+
+    for (const item of o.items) {
+      const qty = Number.isFinite(item.quantity) ? item.quantity : 0;
+      const purchasePrice = Number.isFinite(item.product?.purchasePrice) ? (item.product?.purchasePrice ?? 0) : 0;
+      const itemCogs = purchasePrice * qty;
+      frozenCogs += itemCogs;
+
+      const key = item.productId || item.name;
+      const displayName = item.product?.name || item.name;
+      if (!byProductMap[key]) byProductMap[key] = { name: displayName, count: 0, frozenCogs: 0 };
+      byProductMap[key].count += qty;
+      byProductMap[key].frozenCogs += itemCogs;
+    }
+  }
+
+  lostShipping = Math.round(lostShipping * 100) / 100;
+  frozenCogs = Math.round(frozenCogs * 100) / 100;
+  const totalLoss = Math.round((lostShipping + frozenCogs) * 100) / 100;
+
+  const byProduct = Object.values(byProductMap)
+    .map((p) => ({ ...p, frozenCogs: Math.round(p.frozenCogs * 100) / 100 }))
+    .sort((a, b) => b.frozenCogs - a.frozenCogs);
+
+  const bySource = Object.values(bySourceMap).sort((a, b) => b.count - a.count);
+
+  return res.json({ totalReturns, lostShipping, frozenCogs, totalLoss, byProduct, bySource });
+};
+
+// GET /api/analytics/cash-in-transit — live snapshot of COD money on the road.
+// No date filter: it's "right now". We estimate when that cash lands and how much
+// of it actually redeems, using recent lag + redemption history.
+export const getCashInTransit = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const now = new Date();
+  const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  const orgFilter = { organizationId: orgId };
+
+  const [inTransitOrders, lagOrders, delivered30, returned30] = await Promise.all([
+    // In-transit parcels: SHIPPED with a TTN. We need shippedAt to project landing date.
+    prisma.order.findMany({
+      where: { ...orgFilter, status: 'SHIPPED', trackingNumber: { not: null } },
+      select: { total: true, shippedAt: true },
+    }),
+    // Lag sample: DELIVERED orders in the last ~90 days that have both timestamps.
+    prisma.order.findMany({
+      where: {
+        ...orgFilter,
+        status: 'DELIVERED',
+        deliveredAt: { gte: ninetyDaysAgo, not: null },
+        shippedAt: { not: null },
+      },
+      select: { shippedAt: true, deliveredAt: true },
+    }),
+    // Trailing-30d redemption split (by their terminal dates).
+    prisma.order.count({ where: { ...orgFilter, status: 'DELIVERED', deliveredAt: { gte: thirtyDaysAgo } } }),
+    prisma.order.count({ where: { ...orgFilter, status: 'RETURNED', returnedAt: { gte: thirtyDaysAgo } } }),
+  ]);
+
+  const inTransitTotal = inTransitOrders.reduce((s, o) => s + (Number.isFinite(o.total) ? o.total : 0), 0);
+
+  // Average shipping→delivery lag in days. Fallback 5 days if we have no sample.
+  const lags: number[] = [];
+  for (const o of lagOrders) {
+    if (!o.shippedAt || !o.deliveredAt) continue;
+    const ms = o.deliveredAt.getTime() - o.shippedAt.getTime();
+    if (Number.isFinite(ms) && ms > 0) lags.push(ms / 86400000);
+  }
+  let avgLagDays = lags.length > 0 ? lags.reduce((a, b) => a + b, 0) / lags.length : 5;
+  if (!Number.isFinite(avgLagDays) || avgLagDays <= 0) avgLagDays = 5;
+  avgLagDays = Math.round(avgLagDays * 10) / 10;
+
+  // Trailing-30d redemption rate (delivered vs delivered+returned). Fallback 0.7.
+  const resolved30 = delivered30 + returned30;
+  let redemptionRate = resolved30 > 0 ? delivered30 / resolved30 : 0.7;
+  if (!Number.isFinite(redemptionRate) || redemptionRate <= 0) redemptionRate = 0.7;
+
+  const expectedPayout = Math.round(inTransitTotal * redemptionRate * 100) / 100;
+
+  // Bucket in-transit money by expected delivery date (shippedAt + avgLagDays). Parcels
+  // missing shippedAt land on "today + avgLag" from now as a fallback so they aren't dropped.
+  const lagMs = avgLagDays * 86400000;
+  const byDateMap: Record<string, number> = {};
+  for (const o of inTransitOrders) {
+    const base = o.shippedAt ? o.shippedAt.getTime() : now.getTime();
+    if (!Number.isFinite(base)) continue;
+    const eta = new Date(base + lagMs);
+    const key = eta.toISOString().split('T')[0];
+    const amount = (Number.isFinite(o.total) ? o.total : 0) * redemptionRate;
+    byDateMap[key] = (byDateMap[key] ?? 0) + amount;
+  }
+
+  const expectedByDate = Object.entries(byDateMap)
+    .map(([date, amount]) => ({ date, amount: Math.round(amount * 100) / 100 }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  return res.json({
+    inTransitTotal: Math.round(inTransitTotal * 100) / 100,
+    expectedPayout,
+    avgLagDays,
+    expectedByDate,
   });
 };

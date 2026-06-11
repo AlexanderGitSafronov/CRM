@@ -54,6 +54,7 @@ interface Kpi {
   today: { orders: number; revenue: number };
   month: { orders: number; revenue: number; expenses: number; profit: number };
   inTransit: number;
+  inTransitOrders: number;
   newOrders: number;
   redemptionRate: number | null;
   delivered30: number;
@@ -62,11 +63,19 @@ interface Kpi {
   weeklyOrders: number;
 }
 
+interface InTransitData {
+  inTransitTotal: number;
+  expectedPayout: number;
+  avgLagDays: number;
+  expectedByDate: { date: string; amount: number }[];
+}
+
 export default function DashboardPage() {
   const { user } = useAuthStore();
   const t = useT();
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [kpi, setKpi] = useState<Kpi | null>(null);
+  const [inTransit, setInTransit] = useState<InTransitData | null>(null);
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
   const [chartData, setChartData] = useState<DayData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,6 +103,12 @@ export default function DashboardPage() {
       if (!silent) setError(true);
       else if (!lastUpdated) setError(true);
     }
+    // Cash-in-transit is an additive KPI — fetched separately so a slow/absent endpoint
+    // never blocks or crashes the core dashboard load.
+    api
+      .get('/analytics/cash-in-transit')
+      .then((r) => setInTransit(r.data))
+      .catch(() => setInTransit(null));
     setLoading(false);
     setRefreshing(false);
   };
@@ -269,7 +284,7 @@ export default function DashboardPage() {
             </div>
             <div>
               <p className="text-xs text-gray-400">{t('dashboard.inTransit')}</p>
-              <p className="text-xl font-bold text-gray-900 dark:text-white">{kpi.inTransit}</p>
+              <p className="text-xl font-bold text-gray-900 dark:text-white">{kpi.inTransitOrders}</p>
               <p className="text-xs text-gray-400">{t('dashboard.parcels')}</p>
             </div>
           </div>
@@ -296,6 +311,26 @@ export default function DashboardPage() {
               <p className="text-xl font-bold text-gray-900 dark:text-white">{kpi.pendingCallbacks}</p>
               <p className="text-xs text-gray-400">до завтра</p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cash in transit — money on the road + expected payout.
+          Optional/additive: rendered only once the dedicated endpoint returns data, so a
+          slow or absent endpoint simply omits the card (no skeleton stuck, no crash). */}
+      {inTransit && inTransit.inTransitTotal > 0 && (
+        <div className="card p-4 flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-orange-50 dark:bg-orange-900/20 flex items-center justify-center shrink-0">
+            <Truck className="w-4 h-4 text-orange-600 dark:text-orange-400" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-gray-900 dark:text-white">
+              В дорозі: {formatCurrency(inTransit.inTransitTotal)}
+              <span className="text-gray-400 font-normal"> · очікуємо ~{formatCurrency(inTransit.expectedPayout)}</span>
+            </p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Сер. час до виплати ~{inTransit.avgLagDays} дн.
+            </p>
           </div>
         </div>
       )}

@@ -22,6 +22,7 @@ import {
   Download,
   AlertTriangle,
   RefreshCw,
+  Truck,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -41,6 +42,7 @@ import {
 
 interface DayData { date: string; orders: number; revenue: number }
 interface ManagerData { manager: string; revenue: number; orders: number }
+type Verdict = 'scale' | 'optimize' | 'disable';
 interface ProductData {
   name: string;
   revenue: number;
@@ -49,6 +51,25 @@ interface ProductData {
   profit: number;
   returned: number;
   redemptionRate: number;
+  marginPerUnit?: number;
+  trendPct?: number | null;
+  verdict?: Verdict;
+}
+
+interface ReturnsCostData {
+  totalReturns: number;
+  lostShipping: number;
+  frozenCogs: number;
+  totalLoss: number;
+  byProduct: { name: string; count: number; frozenCogs: number }[];
+  bySource: { source: string; count: number }[];
+}
+
+interface InTransitData {
+  inTransitTotal: number;
+  expectedPayout: number;
+  avgLagDays: number;
+  expectedByDate: { date: string; amount: number }[];
 }
 interface RedemptionData {
   shipped: number;
@@ -101,6 +122,32 @@ interface LtvData {
 
 const PIE_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#ef4444'];
 
+const VERDICT_META: Record<Verdict, { label: string; cls: string }> = {
+  scale: {
+    label: 'Масштабувати',
+    cls: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400',
+  },
+  optimize: {
+    label: 'Оптимізувати',
+    cls: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400',
+  },
+  disable: {
+    label: 'Вимкнути',
+    cls: 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400',
+  },
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  MANUAL: 'Вручну',
+  WEBHOOK: 'Вебхук',
+  LANDING: 'Лендінг',
+  INSTAGRAM: 'Instagram',
+  FACEBOOK: 'Facebook',
+  TELEGRAM: 'Telegram',
+  PHONE: 'Дзвінок',
+  OTHER: 'Інше',
+};
+
 const EXPENSE_CATEGORIES = [
   { value: 'ADVERTISING', label: 'Реклама' },
   { value: 'SERVICES', label: 'Услуги' },
@@ -119,6 +166,8 @@ export default function AnalyticsPage() {
   const [conversionByManager, setConversionByManager] = useState<ManagerConversion[]>([]);
   const [bySource, setBySource] = useState<SourceData[]>([]);
   const [redemption, setRedemption] = useState<RedemptionData | null>(null);
+  const [returnsCost, setReturnsCost] = useState<ReturnsCostData | null>(null);
+  const [inTransit, setInTransit] = useState<InTransitData | null>(null);
   const [ltv, setLtv] = useState<LtvData | null>(null);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [totalExpenses, setTotalExpenses] = useState(0);
@@ -134,6 +183,7 @@ export default function AnalyticsPage() {
     date: new Date().toISOString().split('T')[0],
   });
   const [savingExpense, setSavingExpense] = useState(false);
+  const [productSort, setProductSort] = useState<'margin' | 'revenue' | 'redemption'>('margin');
 
   const buildDateParams = () => {
     if (dateFrom || dateTo) {
@@ -174,6 +224,24 @@ export default function AnalyticsPage() {
     } catch {
       setError(true);
     }
+    // Returns-cost and cash-in-transit are additive panels — fetched resiliently so a
+    // slow/absent endpoint never blanks the page or trips the error state above.
+    // Send both from/to (brief contract) and dateFrom/dateTo (page-wide convention) so the
+    // panel respects period presets regardless of which the backend reads.
+    const p = params as { dateFrom?: string; dateTo?: string };
+    const moneyParams = {
+      ...params,
+      ...(p.dateFrom && { from: p.dateFrom }),
+      ...(p.dateTo && { to: p.dateTo }),
+    };
+    api
+      .get('/analytics/returns-cost', { params: moneyParams })
+      .then((r) => setReturnsCost(r.data))
+      .catch(() => setReturnsCost(null));
+    api
+      .get('/analytics/cash-in-transit')
+      .then((r) => setInTransit(r.data))
+      .catch(() => setInTransit(null));
     setLoading(false);
   };
 
@@ -213,6 +281,14 @@ export default function AnalyticsPage() {
   };
 
   const canEdit = user?.role !== 'VIEWER';
+
+  // Default-sort the ROI table by net margin (profit) desc; the header lets the owner flip
+  // to revenue or redemption. Sort on a copy so we never mutate the fetched array.
+  const sortedProducts = [...byProduct].sort((a, b) => {
+    if (productSort === 'revenue') return b.revenue - a.revenue;
+    if (productSort === 'redemption') return (b.redemptionRate ?? 0) - (a.redemptionRate ?? 0);
+    return b.profit - a.profit;
+  });
 
   const handleExportFinances = async () => {
     const params = buildDateParams();
@@ -377,6 +453,130 @@ export default function AnalyticsPage() {
         </div>
       )}
 
+      {/* Returns cost — how much money returns ate */}
+      {returnsCost && (returnsCost.totalLoss > 0 || returnsCost.totalReturns > 0) && (
+        <div className="card p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <TrendingDown className="w-4 h-4 text-red-500" />
+            <h2 className="font-semibold text-gray-900 dark:text-white">Вартість повернень</h2>
+            <span className="text-xs text-gray-400 ml-1">{returnsCost.totalReturns} повернень</span>
+          </div>
+
+          <div className="rounded-xl bg-red-50 dark:bg-red-900/15 p-4 mb-4">
+            <p className="text-sm text-red-700 dark:text-red-300">
+              Повернення зʼїли{' '}
+              <span className="text-2xl font-bold align-middle">{formatCurrency(returnsCost.totalLoss)}</span>
+            </p>
+            <div className="flex flex-wrap gap-x-6 gap-y-1 mt-2 text-xs text-red-600/80 dark:text-red-300/70">
+              <span>Втрачена доставка: <b>{formatCurrency(returnsCost.lostShipping)}</b></span>
+              <span>Заморожена собівартість: <b>{formatCurrency(returnsCost.frozenCogs)}</b></span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* By product */}
+            <div>
+              <p className="text-xs font-medium text-gray-400 mb-2">Найбільше повернень по товарах</p>
+              {returnsCost.byProduct.length === 0 ? (
+                <p className="text-sm text-gray-400 py-4 text-center">Немає даних</p>
+              ) : (
+                <div className="space-y-2">
+                  {returnsCost.byProduct.slice(0, 6).map((p, i) => {
+                    const maxCogs = Math.max(...returnsCost.byProduct.map((x) => x.frozenCogs), 1);
+                    return (
+                      <div key={i}>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="font-medium text-gray-700 dark:text-gray-300 truncate max-w-[60%]">{p.name}</span>
+                          <span className="text-gray-500 whitespace-nowrap">
+                            {p.count} шт · {formatCurrency(p.frozenCogs)}
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-red-400 rounded-full transition-all"
+                            style={{ width: `${(p.frozenCogs / maxCogs) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* By source */}
+            <div>
+              <p className="text-xs font-medium text-gray-400 mb-2">Повернення по каналах</p>
+              {returnsCost.bySource.length === 0 ? (
+                <p className="text-sm text-gray-400 py-4 text-center">Немає даних</p>
+              ) : (
+                <div className="space-y-2">
+                  {returnsCost.bySource.map((s, i) => {
+                    const maxCount = Math.max(...returnsCost.bySource.map((x) => x.count), 1);
+                    return (
+                      <div key={i}>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="font-medium text-gray-700 dark:text-gray-300">
+                            {SOURCE_LABELS[s.source] ?? s.source}
+                          </span>
+                          <span className="text-gray-500">{s.count} шт</span>
+                        </div>
+                        <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all"
+                            style={{ width: `${(s.count / maxCount) * 100}%`, backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cash in transit — money on the road, expected payout */}
+      {inTransit && inTransit.inTransitTotal > 0 && (
+        <div className="card p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Truck className="w-4 h-4 text-orange-500" />
+            <h2 className="font-semibold text-gray-900 dark:text-white">Гроші в дорозі</h2>
+            <span className="text-xs text-gray-400 ml-1">~{inTransit.avgLagDays} дн. до виплати</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+            <div>
+              <p className="text-xs text-gray-400">В дорозі</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white mt-0.5">{formatCurrency(inTransit.inTransitTotal)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Очікуваний прихід</p>
+              <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">{formatCurrency(inTransit.expectedPayout)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-400">Сер. час доставки</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white mt-0.5">{inTransit.avgLagDays} дн.</p>
+            </div>
+          </div>
+          {inTransit.expectedByDate && inTransit.expectedByDate.length > 0 && (
+            <ResponsiveContainer width="100%" height={150}>
+              <BarChart data={inTransit.expectedByDate}>
+                <CartesianGrid strokeDasharray="3 3" stroke="currentColor" className="text-gray-100 dark:text-gray-800" />
+                <XAxis dataKey="date" tickFormatter={(v) => String(v).slice(5)} tick={{ fontSize: 11, fill: 'currentColor' }} className="text-gray-500" />
+                <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 11, fill: 'currentColor' }} className="text-gray-500" />
+                <Tooltip
+                  formatter={(v: number) => [formatCurrency(v), 'Очікуємо']}
+                  labelFormatter={(l) => formatDate(l)}
+                  contentStyle={{ fontSize: 12 }}
+                />
+                <Bar dataKey="amount" fill="#f59e0b" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      )}
+
       {/* Charts row 1 */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
         <div className="card p-5">
@@ -490,22 +690,59 @@ export default function AnalyticsPage() {
                 <tr className="text-left text-xs text-gray-400 border-b border-gray-100 dark:border-gray-800">
                   <th className="pb-2 pr-4 font-medium">Товар</th>
                   <th className="pb-2 pr-4 font-medium text-right">Шт.</th>
-                  <th className="pb-2 pr-4 font-medium text-right">Выручка</th>
-                  <th className="pb-2 pr-4 font-medium text-right">Прибыль</th>
+                  <th
+                    className="pb-2 pr-4 font-medium text-right cursor-pointer select-none hover:text-gray-600 dark:hover:text-gray-300"
+                    onClick={() => setProductSort('revenue')}
+                  >
+                    Выручка{productSort === 'revenue' && ' ↓'}
+                  </th>
+                  <th
+                    className="pb-2 pr-4 font-medium text-right cursor-pointer select-none hover:text-gray-600 dark:hover:text-gray-300"
+                    onClick={() => setProductSort('margin')}
+                    title="Чистая маржа (после возвратов)"
+                  >
+                    Маржа{productSort === 'margin' && ' ↓'}
+                  </th>
+                  <th className="pb-2 pr-4 font-medium text-right">Маржа/шт</th>
                   <th className="pb-2 pr-4 font-medium text-right">ROI</th>
-                  <th className="pb-2 font-medium text-right">% Выкупа</th>
+                  <th
+                    className="pb-2 pr-4 font-medium text-right cursor-pointer select-none hover:text-gray-600 dark:hover:text-gray-300"
+                    onClick={() => setProductSort('redemption')}
+                  >
+                    % Выкупа{productSort === 'redemption' && ' ↓'}
+                  </th>
+                  <th className="pb-2 font-medium text-right">Вердикт</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
-                {byProduct.map((p, i) => {
+                {sortedProducts.map((p, i) => {
                   const roi = p.cost > 0 ? Math.round((p.profit / p.cost) * 100) : null;
+                  const marginPerUnit = Number.isFinite(p.marginPerUnit as number)
+                    ? (p.marginPerUnit as number)
+                    : p.quantity > 0
+                    ? p.profit / p.quantity
+                    : null;
+                  const trend = Number.isFinite(p.trendPct as number) ? (p.trendPct as number) : null;
+                  const verdict = p.verdict && VERDICT_META[p.verdict] ? VERDICT_META[p.verdict] : null;
                   return (
                     <tr key={i} className="text-gray-700 dark:text-gray-300">
                       <td className="py-2 pr-4 font-medium max-w-[180px] truncate">{p.name}</td>
                       <td className="py-2 pr-4 text-right text-gray-500">{p.quantity}</td>
-                      <td className="py-2 pr-4 text-right">{formatCurrency(p.revenue)}</td>
+                      <td className="py-2 pr-4 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          {formatCurrency(p.revenue)}
+                          {trend !== null && trend !== 0 && (
+                            <span className={`text-xs font-medium ${trend > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                              {trend > 0 ? '▲' : '▼'}{Math.abs(trend)}%
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className={`py-2 pr-4 text-right font-semibold ${p.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
                         {p.cost > 0 ? formatCurrency(p.profit) : '—'}
+                      </td>
+                      <td className="py-2 pr-4 text-right text-gray-500">
+                        {marginPerUnit !== null ? formatCurrency(marginPerUnit) : '—'}
                       </td>
                       <td className="py-2 pr-4 text-right">
                         {roi !== null ? (
@@ -514,10 +751,19 @@ export default function AnalyticsPage() {
                           </span>
                         ) : <span className="text-gray-400">—</span>}
                       </td>
-                      <td className="py-2 text-right">
+                      <td className="py-2 pr-4 text-right">
                         <span className={`font-semibold ${p.redemptionRate >= 70 ? 'text-emerald-600' : p.redemptionRate >= 50 ? 'text-amber-500' : 'text-red-500'}`}>
                           {p.redemptionRate}%
                         </span>
+                      </td>
+                      <td className="py-2 text-right">
+                        {verdict ? (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${verdict.cls}`}>
+                            {verdict.label}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300 dark:text-gray-600">—</span>
+                        )}
                       </td>
                     </tr>
                   );

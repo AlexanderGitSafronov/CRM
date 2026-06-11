@@ -234,6 +234,11 @@ model Order {
   // Дедуп напоминания о прибытии (для более позднего батча/воркера).
   npReminderSentAt    DateTime?
 
+  // Дедуп реверса дохода в Rashod: ставится один раз, когда выкупленный
+  // (deliveredAt != null) заказ затем стал RETURNED/CANCELLED и мы списали
+  // ранее признанный доход. Nullable/additive.
+  rashodReversedAt    DateTime?
+
   // Публичный токен для страницы отслеживания заказа клиентом (без авторизации).
   // Nullable/additive: бэкфилл существующих строк делается вне этого воркфлоу.
   publicToken String? @unique

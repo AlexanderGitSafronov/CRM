@@ -7,6 +7,7 @@ import { runLowStockCheck } from '../workers/lowStockWatcher';
 import prisma from '../services/prisma';
 import { getTurboSmsBalance } from '../services/turbosms';
 import { sendTelegramMessage } from '../services/telegram';
+import { runWeeklyDigest } from '../services/digest';
 import logger from '../utils/logger';
 
 /**
@@ -98,6 +99,8 @@ const JOBS: Record<string, () => Promise<unknown>> = {
   // 'smsbalance' намеренно НЕ входит в JOBS/'all': шлёт алерты в Telegram,
   // на частом тике 'all' это спамило бы команду. Дёргается отдельно
   // (например раз в сутки своим расписанием). См. обработку job в runJob.
+  // 'digest' также НЕ входит в JOBS/'all': это еженедельный отчёт, на каждом
+  // тике 'all' он бы спамил владельцев. Дёргается своим недельным расписанием.
 };
 
 const runJob = async (req: Request, res: Response) => {
@@ -118,9 +121,14 @@ const runJob = async (req: Request, res: Response) => {
       return res.json({ job: 'smsbalance', ...stats });
     }
 
+    if (job === 'digest') {
+      const stats = await runWeeklyDigest();
+      return res.json({ job: 'digest', ...stats });
+    }
+
     const fn = JOBS[job];
     if (!fn) {
-      return res.status(404).json({ error: 'Unknown job. Use: np | sla | callbacks | lowstock | smsbalance | all' });
+      return res.status(404).json({ error: 'Unknown job. Use: np | sla | callbacks | lowstock | smsbalance | digest | all' });
     }
     const stats = await fn();
     return res.json({ job, stats });

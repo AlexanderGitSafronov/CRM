@@ -18,6 +18,8 @@ import {
   getCcPayroll,
   createCcPayment,
   deleteCcPayment,
+  getReturnsCost,
+  getCashInTransit,
 } from '../controllers/analyticsController';
 import { authenticate, requireRole } from '../middleware/auth';
 
@@ -35,6 +37,8 @@ router.get('/cancel-reasons', requireRole('ADMIN', 'MANAGER'), getCancelReasons)
 router.get('/customer-ltv', requireRole('ADMIN', 'MANAGER'), getCustomerLtv);
 router.get('/kpi', requireRole('ADMIN', 'MANAGER'), getKpi);
 router.get('/customers-by-city', requireRole('ADMIN', 'MANAGER'), getCustomersByCity);
+router.get('/returns-cost', requireRole('ADMIN', 'MANAGER'), getReturnsCost);
+router.get('/cash-in-transit', requireRole('ADMIN', 'MANAGER'), getCashInTransit);
 // cc-stats — селф-скоуп статистика колл-центра, доступна всем авторизованным ролям
 router.get('/cc-stats', getCcStats);
 router.get('/expenses', requireRole('ADMIN', 'MANAGER'), getExpenses);

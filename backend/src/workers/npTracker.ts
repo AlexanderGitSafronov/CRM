@@ -4,7 +4,7 @@ import { getTrackingStatuses } from '../services/novaPoshta';
 import { applyStatusTimestamps } from '../services/orderGuards';
 import { createNotification, logActivity } from '../services/notifications';
 import { sendTelegramMessage } from '../services/telegram';
-import { sendIncomeToRashod } from '../services/rashodWebhook';
+import { sendIncomeToRashod, reverseIncomeToRashod } from '../services/rashodWebhook';
 import { sendOrderStatusByIdToAdtrack } from '../services/adtrackWebhook';
 import { sendSmsToCustomer, getTurboSmsConfig } from '../services/turbosms';
 import { broadcastEvent } from '../services/eventBus';
@@ -67,7 +67,8 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
         select: {
           id: true, orderNum: true, trackingNumber: true, managerId: true,
           total: true, source: true, organizationId: true,
-          shippedAt: true, deliveredAt: true, returnedAt: true, npArrivedAt: true,
+          shippedAt: true, deliveredAt: true, returnedAt: true, rashodReversedAt: true,
+          npArrivedAt: true,
           npArrivalNotifiedAt: true, deliveryCity: true, deliveryAddress: true,
           customer: { select: { name: true, phone: true } },
         },
@@ -180,11 +181,29 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
 
             if (status.crmStatus === 'DELIVERED') {
               sendIncomeToRashod({
-                orderId: order.id, orderNum: order.orderNum,
+                organizationId, orderId: order.id, orderNum: order.orderNum,
                 total: order.total, source: order.source, deliveredAt: new Date(),
               }).catch(() => {});
               broadcastEvent(organizationId, 'order_delivered', { orderNum: order.orderNum, total: order.total });
               void checkAchievements(organizationId);
+            }
+
+            // Возврат ранее выкупленного заказа: реверсим доход в Rashod (негативная
+            // сумма) и штампуем rashodReversedAt для дедупа. Зеркалит логику
+            // orderController. deliveredAt берём из выборки (до этого перехода).
+            if (
+              status.crmStatus === 'RETURNED' &&
+              order.deliveredAt != null &&
+              order.rashodReversedAt == null
+            ) {
+              reverseIncomeToRashod({
+                organizationId, orderId: order.id, orderNum: order.orderNum,
+                total: order.total, source: order.source, returnedAt: new Date(),
+              }).catch(() => {});
+              await prisma.order.update({
+                where: { id: order.id },
+                data: { rashodReversedAt: new Date() },
+              }).catch(() => {});
             }
 
             // AdTrack: подтверждённый выкуп / возврат — главный сигнал для FB CAPI.

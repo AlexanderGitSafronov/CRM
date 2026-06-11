@@ -3,6 +3,7 @@ import prisma from '../services/prisma';
 import { sendTelegramMessage } from '../services/telegram';
 import { sendSmsToCustomer, getTurboSmsBalance, type TurboSmsChannel } from '../services/turbosms';
 import { testAdtrackConnection } from '../services/adtrackWebhook';
+import fetch from 'node-fetch';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 
 const router = Router();
@@ -168,6 +169,64 @@ router.post('/adtrack/test', async (req: AuthRequest, res: Response) => {
   const result = await testAdtrackConnection(orgId, inline);
   if (result.ok) return res.json({ success: true, message: 'AdTrack reachable, credentials valid' });
   return res.status(400).json({ success: false, error: result.error });
+});
+
+router.post('/rashod/test', async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const { baseUrl, token } = (req.body ?? {}) as {
+    baseUrl?: string;
+    token?: string;
+  };
+
+  // Если token выглядит как маска из точек/звёздочек — это не настоящий секрет,
+  // а round-trip визуального плейсхолдера. Тянем сохранённый в БД (как в adtrack/test).
+  const isMask = (s: string | undefined) =>
+    typeof s === 'string' && MASKED_RE.test(s);
+
+  let resolvedBaseUrl = (baseUrl || '').trim();
+  let resolvedToken = token && !isMask(token) ? token.trim() : '';
+
+  // Подмешиваем сохранённый конфиг для отсутствующих/замаскированных полей.
+  if (!resolvedBaseUrl || !resolvedToken) {
+    const existing = await prisma.integration.findUnique({
+      where: { organizationId_type: { organizationId: orgId, type: 'RASHOD' } },
+    });
+    if (existing) {
+      try {
+        const cfg = JSON.parse(existing.config) as { baseUrl?: string; token?: string };
+        if (!resolvedBaseUrl) resolvedBaseUrl = (cfg.baseUrl || '').trim();
+        if (!resolvedToken) resolvedToken = (cfg.token || '').trim();
+      } catch {
+        // битый JSON — считаем не настроенным
+      }
+    }
+  }
+
+  if (!resolvedBaseUrl || !resolvedToken) {
+    return res.status(400).json({ success: false, error: 'Rashod integration is not configured (baseUrl + token required)' });
+  }
+
+  const endpoint = `${resolvedBaseUrl.replace(/\/+$/, '')}/api/webhook/income`;
+  try {
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token: resolvedToken,
+        amount: 0,
+        source: 'other',
+        description: 'CRM test ping',
+        date: new Date().toISOString().split('T')[0],
+        orderNum: 0,
+        test: true,
+      }),
+    });
+    if (r.ok) return res.json({ success: true, message: 'Rashod reachable, credentials valid' });
+    const body = await r.text();
+    return res.status(400).json({ success: false, error: `${r.status}: ${body.slice(0, 200)}` });
+  } catch (err) {
+    return res.status(400).json({ success: false, error: (err as Error).message });
+  }
 });
 
 export default router;
