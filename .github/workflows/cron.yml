@@ -1,0 +1,33 @@
+name: CRM background workers
+
+# Drives the serverless backend's cron jobs (Vercel has no long-running workers).
+# Auth: Bearer CRON_SECRET (GitHub repo secret) — must match the backend's CRON_SECRET env.
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 min: NP tracking, SLA, callback reminders, low-stock
+    - cron: '0 9 * * *'      # daily 09:00 UTC: TurboSMS balance check
+    - cron: '0 8 * * 1'      # Mon 08:00 UTC: weekly owner digest
+  workflow_dispatch:          # manual trigger (runs the per-tick jobs)
+
+concurrency:
+  group: crm-cron
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      BASE: https://crmpro-backend.vercel.app
+      AUTH: 'Authorization: Bearer ${{ secrets.CRON_SECRET }}'
+    steps:
+      - name: Per-tick jobs (np, sla, callbacks, lowstock)
+        if: github.event.schedule == '*/15 * * * *' || github.event_name == 'workflow_dispatch'
+        run: curl -fsS --max-time 60 -X POST "$BASE/api/cron/all" -H "$AUTH"
+
+      - name: Daily TurboSMS balance
+        if: github.event.schedule == '0 9 * * *'
+        run: curl -fsS --max-time 60 -X POST "$BASE/api/cron/smsbalance" -H "$AUTH"
+
+      - name: Weekly digest
+        if: github.event.schedule == '0 8 * * 1'
+        run: curl -fsS --max-time 60 -X POST "$BASE/api/cron/digest" -H "$AUTH"
