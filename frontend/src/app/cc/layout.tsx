@@ -96,36 +96,62 @@ export default function CcLayout({ children }: { children: React.ReactNode }) {
     fetchNewCount();
     window.addEventListener('cc:status_changed', fetchNewCount);
 
-    const token = localStorage.getItem('crm_token');
-    if (!token) return;
+    let es: EventSource | null = null;
+    let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-    const es = new EventSource(`${backendUrl}/api/events?token=${token}`);
+    const connectSse = async () => {
+      const token = localStorage.getItem('crm_token');
+      if (!token || cancelled) return;
 
-    es.addEventListener('new_order', (e: MessageEvent) => {
-      let orderNum = '';
+      const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      // Короткоживущий ticket вместо 7-дневного JWT в URL (URL попадает в логи сервера)
+      let sseUrl: string;
       try {
-        const data = JSON.parse(e.data);
-        orderNum = data.orderNum ? ` #${data.orderNum}` : '';
-      } catch {}
+        const res = await api.post('/events/ticket');
+        sseUrl = `${backendUrl}/api/events?ticket=${encodeURIComponent(res.data.ticket)}`;
+      } catch {
+        // Фолбэк: старый бэкенд без /events/ticket — подключаемся по-старому
+        sseUrl = `${backendUrl}/api/events?token=${token}`;
+      }
+      if (cancelled) return;
+      es = new EventSource(sseUrl);
 
-      if (soundEnabledRef.current) playChime();
+      es.addEventListener('new_order', (e: MessageEvent) => {
+        let orderNum = '';
+        try {
+          const data = JSON.parse(e.data);
+          orderNum = data.orderNum ? ` #${data.orderNum}` : '';
+        } catch {}
 
-      toast.success(`Новый заказ${orderNum}!`, {
-        duration: 6000,
-        icon: '📦',
-        style: { fontWeight: '600' },
+        if (soundEnabledRef.current) playChime();
+
+        toast.success(`Новый заказ${orderNum}!`, {
+          duration: 6000,
+          icon: '📦',
+          style: { fontWeight: '600' },
+        });
+
+        fetchNewCount();
+        window.dispatchEvent(new CustomEvent('cc:new_order'));
       });
 
-      fetchNewCount();
-      window.dispatchEvent(new CustomEvent('cc:new_order'));
-    });
+      es.onerror = () => {
+        es?.close();
+        es = null;
+        if (cancelled) return;
+        // Переподключаемся со СВЕЖИМ ticket — старый живёт только 60 секунд
+        reconnectTimer = setTimeout(connectSse, 5000);
+      };
+    };
 
-    es.onerror = () => { es.close(); };
+    connectSse();
 
     return () => {
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       window.removeEventListener('cc:status_changed', fetchNewCount);
-      es.close();
+      es?.close();
     };
   }, [user, fetchNewCount]);
 

@@ -136,6 +136,7 @@ export default function RegisterPage() {
                   value={email}
                   onChange={setEmail}
                   placeholder="you@company.com"
+                  autoComplete="email"
                   required
                 />
                 <div>
@@ -148,6 +149,7 @@ export default function RegisterPage() {
                       onChange={(e) => setPassword(e.target.value)}
                       className="w-full pl-10 pr-10 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all"
                       placeholder="Мінімум 8 символів"
+                      autoComplete="new-password"
                       required
                     />
                     <button
@@ -203,7 +205,7 @@ export default function RegisterPage() {
 }
 
 function Field({
-  icon: Icon, label, type, value, onChange, placeholder, required, autoFocus,
+  icon: Icon, label, type, value, onChange, placeholder, required, autoFocus, autoComplete,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
@@ -213,6 +215,7 @@ function Field({
   placeholder?: string;
   required?: boolean;
   autoFocus?: boolean;
+  autoComplete?: string;
 }) {
   return (
     <div>
@@ -227,6 +230,7 @@ function Field({
           placeholder={placeholder}
           required={required}
           autoFocus={autoFocus}
+          autoComplete={autoComplete}
         />
       </div>
     </div>

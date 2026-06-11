@@ -210,8 +210,9 @@ export default function AnalyticsPage() {
   const handleExportFinances = async () => {
     const params = buildDateParams();
     const query = new URLSearchParams(params as Record<string, string>).toString();
-    const token = localStorage.getItem('token');
-    const res = await fetch(`/api/export/finances?${query}`, {
+    const token = localStorage.getItem('crm_token');
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+    const res = await fetch(`${apiBase}/api/export/finances?${query}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) { toast.error('Ошибка экспорта'); return; }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@/stores/authStore';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
@@ -30,8 +30,18 @@ function playChime() {
   } catch {}
 }
 
+// Зеркало ролей из Sidebar navItems (components/layout/Sidebar.tsx).
+// UX-гард: бэкенд проверяет роли сам, здесь только редирект для UI.
+const ROUTE_ROLES: Array<{ prefix: string; roles: string[] }> = [
+  { prefix: '/analytics/cc-payroll', roles: ['ADMIN'] },
+  { prefix: '/analytics', roles: ['ADMIN', 'MANAGER'] },
+  { prefix: '/goals', roles: ['ADMIN', 'MANAGER'] },
+  { prefix: '/settings', roles: ['ADMIN'] },
+];
+
 export default function CrmLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const { user, _hasHydrated } = useAuthStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -59,8 +69,15 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
       router.replace('/login');
     } else if (user.role === 'CALL_CENTER') {
       router.replace('/cc');
+    } else {
+      // Страницы, скрытые в Sidebar по ролям, недоступны и по прямому URL
+      const path = pathname ?? '';
+      const rule = ROUTE_ROLES.find((r) => path.startsWith(r.prefix));
+      if (rule && !rule.roles.includes(user.role)) {
+        router.replace('/dashboard');
+      }
     }
-  }, [user, _hasHydrated, router]);
+  }, [user, _hasHydrated, pathname, router]);
 
   useEffect(() => {
     if (!user) return;
@@ -78,12 +95,26 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
     window.addEventListener('notifications:refresh', fetchUnread);
 
     // SSE: обновляем бейдж и дашборд при новом заказе на ЛЮБОЙ странице
-    const token = localStorage.getItem('crm_token');
     let es: EventSource | null = null;
-    if (token) {
+    let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connectSse = async () => {
+      const token = localStorage.getItem('crm_token');
+      if (!token || cancelled) return;
       // Подключаемся напрямую к бэкенду — Next.js proxy буферизует SSE
       const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-      es = new EventSource(`${backendUrl}/api/events?token=${token}`);
+      // Короткоживущий ticket вместо 7-дневного JWT в URL (URL попадает в логи сервера)
+      let sseUrl: string;
+      try {
+        const res = await api.post('/events/ticket');
+        sseUrl = `${backendUrl}/api/events?ticket=${encodeURIComponent(res.data.ticket)}`;
+      } catch {
+        // Фолбэк: старый бэкенд без /events/ticket — подключаемся по-старому
+        sseUrl = `${backendUrl}/api/events?token=${token}`;
+      }
+      if (cancelled) return;
+      es = new EventSource(sseUrl);
       es.addEventListener('new_order', () => {
         fetchUnread();
         window.dispatchEvent(new CustomEvent('dashboard:refresh'));
@@ -115,10 +146,20 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
           window.dispatchEvent(new CustomEvent('achievement:refresh'));
         } catch {}
       });
-      es.onerror = () => { es?.close(); };
-    }
+      es.onerror = () => {
+        es?.close();
+        es = null;
+        if (cancelled) return;
+        // Переподключаемся со СВЕЖИМ ticket — старый живёт только 60 секунд
+        reconnectTimer = setTimeout(connectSse, 5000);
+      };
+    };
+
+    connectSse();
 
     return () => {
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       clearInterval(interval);
       window.removeEventListener('notifications:refresh', fetchUnread);
       es?.close();

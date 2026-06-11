@@ -26,7 +26,9 @@ export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
       user: null,
-      token: null,
+      // Источник истины для JWT — localStorage 'crm_token' (его пишет login/register,
+      // читает interceptor в lib/api.ts). В zustand-блоб токен не дублируем (см. partialize).
+      token: typeof window !== 'undefined' ? localStorage.getItem('crm_token') : null,
       isLoading: false,
       _hasHydrated: false,
       setHasHydrated: (v) => set({ _hasHydrated: v }),
@@ -67,7 +69,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'crm_user',
-      partialize: (state) => ({ user: state.user, token: state.token }),
+      partialize: (state) => ({ user: state.user }),
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true);
       },

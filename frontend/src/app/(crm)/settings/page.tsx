@@ -366,6 +366,11 @@ export default function SettingsPage() {
 
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Бэкенд требует минимум 8 символов (userController) — проверяем и при создании, и при смене пароля
+    if (userForm.password && userForm.password.length < 8) {
+      toast.error('Пароль должен содержать минимум 8 символов');
+      return;
+    }
     setSavingUser(true);
     try {
       if (editUser) {
@@ -1357,17 +1362,18 @@ export default function SettingsPage() {
           </div>
           <div>
             <label className="label">Email *</label>
-            <input className="input" type="email" value={userForm.email} onChange={(e) => setUserForm((p) => ({ ...p, email: e.target.value }))} placeholder="user@example.com" required />
+            <input className="input" type="email" autoComplete="off" value={userForm.email} onChange={(e) => setUserForm((p) => ({ ...p, email: e.target.value }))} placeholder="user@example.com" required />
           </div>
           <div>
             <label className="label">{editUser ? 'Новый пароль (оставьте пустым для сохранения)' : 'Пароль *'}</label>
             <input
               className="input"
               type="password"
+              autoComplete="new-password"
               value={userForm.password}
               onChange={(e) => setUserForm((p) => ({ ...p, password: e.target.value }))}
-              placeholder={editUser ? '••••••' : 'Минимум 6 символов'}
-              minLength={editUser ? 0 : 6}
+              placeholder={editUser ? '••••••' : 'Минимум 8 символов'}
+              minLength={editUser ? 0 : 8}
               required={!editUser}
             />
           </div>
