@@ -20,6 +20,9 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
   const dateFilter = dateRange(dateFrom, dateTo);
   const createdAtFilter = Object.keys(dateFilter).length ? { createdAt: dateFilter } : {};
   const orgFilter = { organizationId: orgId, ...createdAtFilter };
+  // Realized money is counted only for DELIVERED orders and is attributed
+  // to the date the parcel was actually picked up (deliveredAt), not createdAt.
+  const deliveredAtFilter = Object.keys(dateFilter).length ? { deliveredAt: dateFilter } : {};
 
   const [
     totalOrders,
@@ -38,7 +41,7 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
     prisma.order.count({ where: { ...orgFilter, status: 'DELIVERED' } }),
     prisma.order.count({ where: { ...orgFilter, status: 'CANCELLED' } }),
     prisma.order.aggregate({
-      where: { ...orgFilter, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+      where: { organizationId: orgId, status: 'DELIVERED', ...deliveredAtFilter },
       _sum: { total: true },
     }),
     prisma.customer.count({ where: { organizationId: orgId, ...createdAtFilter } }),
@@ -115,12 +118,13 @@ export const getRevenueByManager = async (req: AuthRequest, res: Response) => {
 
   const data = await Promise.all(
     managers.map(async (m) => {
+      // Realized revenue per manager: only DELIVERED orders, attributed by deliveredAt.
       const result = await prisma.order.aggregate({
         where: {
           organizationId: orgId,
           managerId: m.id,
-          status: { notIn: ['CANCELLED', 'RETURNED'] },
-          ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+          status: 'DELIVERED',
+          ...(Object.keys(dateFilter).length ? { deliveredAt: dateFilter } : {}),
         },
         _sum: { total: true },
         _count: { id: true },
@@ -136,15 +140,23 @@ export const getRevenueByProduct = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const { dateFrom, dateTo, limit = '10' } = req.query as Record<string, string>;
   const dateFilter = dateRange(dateFrom, dateTo);
-  const orderFilter = {
+  // Realized money side (DELIVERED) is windowed by deliveredAt; the returns side
+  // (used for redemption rate) is windowed by returnedAt — both are realized outcomes.
+  const deliveredOrderFilter = {
     organizationId: orgId,
-    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+    status: 'DELIVERED',
+    ...(Object.keys(dateFilter).length ? { deliveredAt: dateFilter } : {}),
+  };
+  const returnedOrderFilter = {
+    organizationId: orgId,
+    status: 'RETURNED',
+    ...(Object.keys(dateFilter).length ? { returnedAt: dateFilter } : {}),
   };
 
   const [deliveredItems, returnedItems] = await Promise.all([
     prisma.orderItem.findMany({
       where: {
-        order: { ...orderFilter, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+        order: deliveredOrderFilter,
       },
       select: {
         name: true,
@@ -156,7 +168,7 @@ export const getRevenueByProduct = async (req: AuthRequest, res: Response) => {
     }),
     prisma.orderItem.findMany({
       where: {
-        order: { ...orderFilter, status: 'RETURNED' },
+        order: returnedOrderFilter,
       },
       select: { name: true, quantity: true, productId: true },
     }),
@@ -204,12 +216,13 @@ export const getRevenueBySource = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const { dateFrom, dateTo } = req.query as Record<string, string>;
   const dateFilter = dateRange(dateFrom, dateTo);
+  // Intake/conversion-funnel side is windowed by createdAt (when the lead came in).
   const orderFilter = {
     organizationId: orgId,
     ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
   };
 
-  const [totalBySource, activeBySource] = await Promise.all([
+  const [totalBySource, activeBySource, revenueBySource] = await Promise.all([
     prisma.order.groupBy({
       by: ['source'],
       where: orderFilter,
@@ -218,12 +231,22 @@ export const getRevenueBySource = async (req: AuthRequest, res: Response) => {
     prisma.order.groupBy({
       by: ['source'],
       where: { ...orderFilter, status: { notIn: ['CANCELLED', 'RETURNED'] } },
-      _sum: { total: true },
       _count: { id: true },
+    }),
+    // Realized money per source: only DELIVERED orders, attributed by deliveredAt.
+    prisma.order.groupBy({
+      by: ['source'],
+      where: {
+        organizationId: orgId,
+        status: 'DELIVERED',
+        ...(Object.keys(dateFilter).length ? { deliveredAt: dateFilter } : {}),
+      },
+      _sum: { total: true },
     }),
   ]);
 
   const activeMap = new Map(activeBySource.map((r) => [r.source, r]));
+  const revenueMap = new Map(revenueBySource.map((r) => [r.source, r]));
 
   const SOURCE_LABELS: Record<string, string> = {
     WEBSITE: 'Сайт', LANDING: 'Лендинг', MAGAZ: 'Магазин', FACEBOOK: 'Facebook',
@@ -235,7 +258,7 @@ export const getRevenueBySource = async (req: AuthRequest, res: Response) => {
       const active = activeMap.get(row.source);
       const total = row._count.id;
       const converted = active?._count.id ?? 0;
-      const revenue = active?._sum.total ?? 0;
+      const revenue = revenueMap.get(row.source)?._sum.total ?? 0;
       return {
         source: row.source,
         label: SOURCE_LABELS[row.source] ?? row.source,
@@ -409,22 +432,35 @@ export const getRedemptionRate = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const { dateFrom, dateTo } = req.query as Record<string, string>;
   const dateFilter = dateRange(dateFrom, dateTo);
+  // Redemption (выкуп) is a realized outcome: window DELIVERED by deliveredAt and
+  // RETURNED by returnedAt. SHIPPED is in-transit (no terminal date) so it stays
+  // windowed by createdAt — it is informational, not part of the realized split.
   const orderFilter = {
     organizationId: orgId,
     ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
   };
+  const deliveredFilter = {
+    organizationId: orgId,
+    status: 'DELIVERED',
+    ...(Object.keys(dateFilter).length ? { deliveredAt: dateFilter } : {}),
+  };
+  const returnedFilter = {
+    organizationId: orgId,
+    status: 'RETURNED',
+    ...(Object.keys(dateFilter).length ? { returnedAt: dateFilter } : {}),
+  };
 
   const [shipped, delivered, returned] = await Promise.all([
     prisma.order.count({ where: { ...orderFilter, status: 'SHIPPED' } }),
-    prisma.order.count({ where: { ...orderFilter, status: 'DELIVERED' } }),
-    prisma.order.count({ where: { ...orderFilter, status: 'RETURNED' } }),
+    prisma.order.count({ where: deliveredFilter }),
+    prisma.order.count({ where: returnedFilter }),
   ]);
 
   const resolved = delivered + returned;
   const redemptionRate = resolved > 0 ? Math.round((delivered / resolved) * 100 * 10) / 10 : null;
 
   const revenueResult = await prisma.order.aggregate({
-    where: { ...orderFilter, status: 'DELIVERED' },
+    where: deliveredFilter,
     _sum: { total: true },
   });
 
@@ -438,8 +474,8 @@ export const getRedemptionRate = async (req: AuthRequest, res: Response) => {
     const prevFrom = new Date(from.getTime() - periodMs);
     const prevTo = new Date(from.getTime() - 1);
     const [pd, pr] = await Promise.all([
-      prisma.order.count({ where: { organizationId: orgId, createdAt: { gte: prevFrom, lte: prevTo }, status: 'DELIVERED' } }),
-      prisma.order.count({ where: { organizationId: orgId, createdAt: { gte: prevFrom, lte: prevTo }, status: 'RETURNED' } }),
+      prisma.order.count({ where: { organizationId: orgId, deliveredAt: { gte: prevFrom, lte: prevTo }, status: 'DELIVERED' } }),
+      prisma.order.count({ where: { organizationId: orgId, returnedAt: { gte: prevFrom, lte: prevTo }, status: 'RETURNED' } }),
     ]);
     const prevResolved = pd + pr;
     prevRedemptionRate = prevResolved > 0 ? Math.round((pd / prevResolved) * 100 * 10) / 10 : null;
@@ -498,14 +534,17 @@ export const getCustomerLtv = async (req: AuthRequest, res: Response) => {
   const { dateFrom, dateTo, limit = '20' } = req.query as Record<string, string>;
   const dateFilter = dateRange(dateFrom, dateTo);
 
+  // LTV is realized money: only DELIVERED orders, windowed and ordered by deliveredAt
+  // (the date the customer actually redeemed and paid for the COD parcel).
+  const realizedOrderFilter = {
+    ...(Object.keys(dateFilter).length ? { deliveredAt: dateFilter } : {}),
+    status: 'DELIVERED',
+  };
   const customers = await prisma.customer.findMany({
     where: {
       organizationId: orgId,
       orders: {
-        some: {
-          ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
-          status: { notIn: ['CANCELLED', 'RETURNED'] },
-        },
+        some: realizedOrderFilter,
       },
     },
     select: {
@@ -513,12 +552,9 @@ export const getCustomerLtv = async (req: AuthRequest, res: Response) => {
       name: true,
       phone: true,
       orders: {
-        where: {
-          ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
-          status: { notIn: ['CANCELLED', 'RETURNED'] },
-        },
-        select: { total: true, createdAt: true },
-        orderBy: { createdAt: 'asc' },
+        where: realizedOrderFilter,
+        select: { total: true, deliveredAt: true },
+        orderBy: { deliveredAt: 'asc' },
       },
     },
   });
@@ -530,8 +566,8 @@ export const getCustomerLtv = async (req: AuthRequest, res: Response) => {
     ordersCount: c.orders.length,
     ltv: c.orders.reduce((s, o) => s + o.total, 0),
     avgOrder: c.orders.length > 0 ? Math.round(c.orders.reduce((s, o) => s + o.total, 0) / c.orders.length) : 0,
-    firstOrder: c.orders[0]?.createdAt ?? null,
-    lastOrder: c.orders[c.orders.length - 1]?.createdAt ?? null,
+    firstOrder: c.orders[0]?.deliveredAt ?? null,
+    lastOrder: c.orders[c.orders.length - 1]?.deliveredAt ?? null,
   }));
 
   const sorted = withStats.sort((a, b) => b.ltv - a.ltv).slice(0, parseInt(limit));
@@ -792,13 +828,14 @@ export const getKpi = async (req: AuthRequest, res: Response) => {
     inTransit, delivered30, returned30, pendingCallbacks, weeklyOrders, newOrders,
   ] = await Promise.all([
     prisma.order.count({ where: { ...orgFilter, createdAt: { gte: todayStart } } }),
+    // Realized revenue: only DELIVERED orders, attributed by deliveredAt (not createdAt).
     prisma.order.aggregate({
-      where: { ...orgFilter, createdAt: { gte: todayStart }, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+      where: { ...orgFilter, deliveredAt: { gte: todayStart }, status: 'DELIVERED' },
       _sum: { total: true },
     }),
     prisma.order.count({ where: { ...orgFilter, createdAt: { gte: thirtyDaysAgo } } }),
     prisma.order.aggregate({
-      where: { ...orgFilter, createdAt: { gte: thirtyDaysAgo }, status: { notIn: ['CANCELLED', 'RETURNED'] } },
+      where: { ...orgFilter, deliveredAt: { gte: thirtyDaysAgo }, status: 'DELIVERED' },
       _sum: { total: true },
     }),
     prisma.expense.aggregate({
@@ -806,8 +843,9 @@ export const getKpi = async (req: AuthRequest, res: Response) => {
       _sum: { amount: true },
     }),
     prisma.order.count({ where: { ...orgFilter, status: 'SHIPPED' } }),
-    prisma.order.count({ where: { ...orgFilter, createdAt: { gte: thirtyDaysAgo }, status: 'DELIVERED' } }),
-    prisma.order.count({ where: { ...orgFilter, createdAt: { gte: thirtyDaysAgo }, status: 'RETURNED' } }),
+    // Realized outcomes for redemption rate: delivered by deliveredAt, returned by returnedAt.
+    prisma.order.count({ where: { ...orgFilter, deliveredAt: { gte: thirtyDaysAgo }, status: 'DELIVERED' } }),
+    prisma.order.count({ where: { ...orgFilter, returnedAt: { gte: thirtyDaysAgo }, status: 'RETURNED' } }),
     prisma.callback.count({ where: { ...orgFilter, done: false, scheduledAt: { lte: new Date(now.getTime() + 24 * 60 * 60 * 1000) } } }),
     prisma.order.count({ where: { ...orgFilter, createdAt: { gte: sevenDaysAgo } } }),
     prisma.order.count({ where: { ...orgFilter, status: 'NEW' } }),

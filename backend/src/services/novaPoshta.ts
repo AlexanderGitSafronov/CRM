@@ -25,20 +25,24 @@ export async function npPost<T = unknown>(
 }
 
 // NP StatusCode → CRM status mapping
-// 9 = Вручено, 14 = Прибув на склад (відділення) → DELIVERED
+// 9 = Вручено → DELIVERED (реальний викуп / отримання COD)
 // 10 = Повернення ініційовано, 11 = Відмова отримувача → RETURNED
+// 7/8/14 = Прибув на склад/відділення — лише ARRIVED, НЕ виручка (див. ARRIVED_STATUS_CODES + NpTrackingStatus.arrived)
 const NP_STATUS_MAP: Record<string, 'DELIVERED' | 'RETURNED' | null> = {
   '9': 'DELIVERED',
-  '14': 'DELIVERED',
   '10': 'RETURNED',
   '11': 'RETURNED',
 };
+
+// NP StatusCode-и, що означають "посилка прибула до відділення/поштомата" (ще НЕ виручка).
+const ARRIVED_STATUS_CODES = new Set(['7', '8', '14']);
 
 export interface NpTrackingStatus {
   ttn: string;
   statusCode: string;
   statusText: string;
   crmStatus: 'DELIVERED' | 'RETURNED' | null; // null = no change needed
+  arrived: boolean; // true коли посилка прибула до відділення (коди 7/8/14) — не виручка
   actualDeliveryDate?: string;
 }
 
@@ -73,6 +77,7 @@ export async function getTrackingStatuses(
     statusCode: doc.StatusCode,
     statusText: doc.Status,
     crmStatus: NP_STATUS_MAP[doc.StatusCode] ?? null,
+    arrived: ARRIVED_STATUS_CODES.has(doc.StatusCode),
     actualDeliveryDate: doc.ActualDeliveryDate || undefined,
   }));
 }

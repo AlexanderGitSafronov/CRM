@@ -215,6 +215,17 @@ model Order {
   adtrackLastStatus    String?
   adtrackLastSentAt    DateTime?
 
+  // Реальные таймстемпы жизненного цикла (честные даты денег).
+  // shippedAt — отгрузка, deliveredAt — реальный выкуп COD-посылки,
+  // returnedAt — возврат. npArrivedAt — посылка прибыла на отделение
+  // (НП код 14, ещё не выкуплена). npArrivalNotifiedAt — для дедупа SMS
+  // о прибытии (заполняется в более позднем батче).
+  shippedAt           DateTime?
+  deliveredAt         DateTime?
+  returnedAt          DateTime?
+  npArrivedAt         DateTime?
+  npArrivalNotifiedAt DateTime?
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

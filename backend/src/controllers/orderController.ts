@@ -8,6 +8,7 @@ import { sendOrderStatusByIdToAdtrack } from '../services/adtrackWebhook';
 import { getNextManagerId } from '../services/roundRobin';
 import { checkAchievements } from '../services/achievements';
 import {
+  applyStatusTimestamps,
   assertOrderQuota,
   createOrderWithOrderNumRetry,
   filterOrgProductIds,
@@ -301,7 +302,7 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
 
   const existing = await prisma.order.findFirst({
     where: { id, organizationId: orgId },
-    select: { status: true, managerId: true, orderNum: true },
+    select: { status: true, managerId: true, orderNum: true, shippedAt: true, deliveredAt: true, returnedAt: true },
   });
 
   if (!existing) {
@@ -323,6 +324,8 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'Invalid status' });
     }
     updateData.status = status;
+    // Реальные даты жизненного цикла (честные деньги): отгрузка/выкуп/возврат.
+    Object.assign(updateData, applyStatusTimestamps(status, existing));
     historyEntries.push({
       action: 'STATUS_CHANGED',
       oldValue: existing.status,
@@ -590,13 +593,33 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
 
   const orders = await prisma.order.findMany({
     where: { id: { in: ids }, organizationId: orgId },
-    select: { id: true, status: true, orderNum: true, total: true, source: true },
+    select: { id: true, status: true, orderNum: true, total: true, source: true, shippedAt: true, deliveredAt: true, returnedAt: true },
   });
 
   await prisma.order.updateMany({
     where: { id: { in: orders.map((o) => o.id) }, organizationId: orgId },
     data: { status },
   });
+
+  // Реальные даты жизненного цикла. updateMany не умеет per-row значения, поэтому
+  // отдельным апдейтом проставляем единственное релевантное для целевого статуса поле
+  // тем заказам, у кого статус реально сменился и таймстемп ещё пуст (идемпотентно).
+  const timestampField: 'shippedAt' | 'deliveredAt' | 'returnedAt' | null =
+    status === 'SHIPPED' ? 'shippedAt'
+    : status === 'DELIVERED' ? 'deliveredAt'
+    : status === 'RETURNED' ? 'returnedAt'
+    : null;
+  if (timestampField) {
+    const toStamp = orders
+      .filter((o) => o.status !== status && o[timestampField] === null)
+      .map((o) => o.id);
+    if (toStamp.length > 0) {
+      await prisma.order.updateMany({
+        where: { id: { in: toStamp }, organizationId: orgId },
+        data: { [timestampField]: new Date() },
+      });
+    }
+  }
 
   await prisma.orderHistory.createMany({
     data: orders.map((o) => ({

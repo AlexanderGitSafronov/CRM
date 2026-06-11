@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import prisma from '../services/prisma';
 import { getTrackingStatuses } from '../services/novaPoshta';
+import { applyStatusTimestamps } from '../services/orderGuards';
 import { createNotification, logActivity } from '../services/notifications';
 import { sendTelegramMessage } from '../services/telegram';
 import { sendIncomeToRashod } from '../services/rashodWebhook';
@@ -55,6 +56,7 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
         select: {
           id: true, orderNum: true, trackingNumber: true, managerId: true,
           total: true, source: true, organizationId: true,
+          shippedAt: true, deliveredAt: true, returnedAt: true, npArrivedAt: true,
           customer: { select: { name: true, phone: true } },
         },
       });
@@ -71,13 +73,35 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
           const statuses = await getTrackingStatuses(ttns, apiKey);
 
           for (const status of statuses) {
-            if (!status.crmStatus) continue;
             const order = batch.find((o) => o.trackingNumber === status.ttn);
             if (!order) continue;
 
+            // Посилка прибула до відділення (коди 7/8/14): фіксуємо момент прибуття,
+            // але НЕ змінюємо статус і НЕ визнаємо виручку. Пишемо лише один раз (null-guard),
+            // тож повторні цикли не перетирають таймстемп і не тригерять побічні ефекти.
+            if (!status.crmStatus) {
+              if (status.arrived && !order.npArrivedAt) {
+                await prisma.order.update({
+                  where: { id: order.id },
+                  data: { npArrivedAt: new Date() },
+                });
+              }
+              continue;
+            }
+
+            // Реальний фінальний статус (DELIVERED/RETURNED): проставляємо lifecycle-таймстемп.
+            // Для DELIVERED надаємо перевагу фактичній даті отримання від НП (actualDeliveryDate).
+            const timestamps = applyStatusTimestamps(status.crmStatus, order);
+            if (status.crmStatus === 'DELIVERED' && 'deliveredAt' in timestamps && status.actualDeliveryDate) {
+              const actual = new Date(status.actualDeliveryDate);
+              if (!Number.isNaN(actual.getTime())) {
+                timestamps.deliveredAt = actual;
+              }
+            }
+
             await prisma.order.update({
               where: { id: order.id },
-              data: { status: status.crmStatus },
+              data: { status: status.crmStatus, ...timestamps },
             });
 
             await prisma.orderHistory.create({

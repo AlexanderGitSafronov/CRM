@@ -50,6 +50,9 @@ export const exportOrders = async (req: AuthRequest, res: Response) => {
   const rows = orders.map((o) => ({
     '№ заказа': o.orderNum,
     'Дата создания': o.createdAt.toLocaleString('uk-UA'),
+    'Дата отправки': o.shippedAt ? o.shippedAt.toLocaleString('uk-UA') : '',
+    'Дата вручения': o.deliveredAt ? o.deliveredAt.toLocaleString('uk-UA') : '',
+    'Дата возврата': o.returnedAt ? o.returnedAt.toLocaleString('uk-UA') : '',
     'Клиент': csvCell(o.customer.name),
     'Телефон': csvCell(o.customer.phone),
     'Email': csvCell(o.customer.email || ''),
@@ -86,9 +89,12 @@ export const exportFinances = async (req: AuthRequest, res: Response) => {
     end.setHours(23, 59, 59, 999);
     dateFilter.lte = end;
   }
+  // Income is realized only when the COD parcel is redeemed: window DELIVERED orders
+  // by deliveredAt (the real payment date), not createdAt. Returns/cancelled are
+  // excluded from income by the status filter. Expenses are windowed by their own date.
   const orderWhere = {
     organizationId: orgId,
-    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+    ...(Object.keys(dateFilter).length ? { deliveredAt: dateFilter } : {}),
   };
   const expenseWhere = {
     organizationId: orgId,
@@ -99,8 +105,8 @@ export const exportFinances = async (req: AuthRequest, res: Response) => {
     prisma.expense.findMany({ where: expenseWhere, orderBy: { date: 'desc' } }),
     prisma.order.findMany({
       where: { ...orderWhere, status: 'DELIVERED' },
-      select: { orderNum: true, total: true, createdAt: true, source: true, customer: { select: { name: true } } },
-      orderBy: { createdAt: 'desc' },
+      select: { orderNum: true, total: true, createdAt: true, deliveredAt: true, source: true, customer: { select: { name: true } } },
+      orderBy: { deliveredAt: 'desc' },
     }),
   ]);
 
@@ -118,7 +124,9 @@ export const exportFinances = async (req: AuthRequest, res: Response) => {
 
   const revenueRows = deliveredOrders.map((o) => ({
     'Тип': 'Доход',
-    'Дата': o.createdAt.toLocaleDateString('uk-UA'),
+    // Date the parcel was actually redeemed (deliveredAt); fall back to createdAt
+    // for any pre-backfill DELIVERED order that has no deliveredAt yet.
+    'Дата': (o.deliveredAt ?? o.createdAt).toLocaleDateString('uk-UA'),
     'Категория/Источник': o.source,
     'Описание': csvCell(`Замовлення #${o.orderNum} — ${o.customer.name}`),
     'Сумма': o.total,

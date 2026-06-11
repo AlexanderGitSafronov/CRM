@@ -44,6 +44,27 @@ export function validateOrderItems(items: unknown): ItemsCheck {
 }
 
 /**
+ * Чистый хелпер: какие таймстемпы жизненного цикла проставить при смене статуса.
+ * Идемпотентен — никогда не перетирает уже проставленный таймстемп.
+ * Единый источник правды для updateOrder/bulkUpdateStatus.
+ */
+export function applyStatusTimestamps(
+  newStatus: string,
+  existing: { shippedAt: Date | null; deliveredAt: Date | null; returnedAt: Date | null }
+): Partial<{ shippedAt: Date; deliveredAt: Date; returnedAt: Date }> {
+  if (newStatus === 'SHIPPED' && !existing.shippedAt) {
+    return { shippedAt: new Date() };
+  }
+  if (newStatus === 'DELIVERED' && !existing.deliveredAt) {
+    return { deliveredAt: new Date() };
+  }
+  if (newStatus === 'RETURNED' && !existing.returnedAt) {
+    return { returnedAt: new Date() };
+  }
+  return {};
+}
+
+/**
  * Месячная квота заказов тарифа (Organization.maxOrders, календарный месяц UTC).
  */
 export async function assertOrderQuota(
