@@ -6,6 +6,7 @@ import { formatCurrency } from '@/lib/utils';
 import Modal from '@/components/ui/Modal';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Pagination from '@/components/ui/Pagination';
+import { SkeletonRow } from '@/components/ui/Skeleton';
 import type { Product, Pagination as PaginationType } from '@/types';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '@/stores/authStore';
@@ -19,6 +20,8 @@ import {
   TrendingUp,
   X,
   Upload,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import CsvImport from '@/components/CsvImport';
 import ImageUploader from '@/components/ImageUploader';
@@ -52,7 +55,9 @@ export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [pagination, setPagination] = useState<PaginationType>({ total: 0, page: 1, limit: 50, pages: 0 });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
   const [editProduct, setEditProduct] = useState<Product | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -62,17 +67,29 @@ export default function ProductsPage() {
   const [form, setForm] = useState<ProductForm>(EMPTY_FORM);
   const [importOpen, setImportOpen] = useState(false);
 
+  // Debounce the search input: fetch only fires 400ms after typing stops.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const fetchProducts = useCallback(async () => {
     setLoading(true);
+    setError(false);
     try {
       const res = await api.get('/products', {
-        params: { page, limit: 50, ...(search && { search }) },
+        params: { page, limit: 50, ...(debouncedSearch && { search: debouncedSearch }) },
       });
       setProducts(res.data.products);
       setPagination(res.data.pagination);
-    } catch {}
+    } catch {
+      setError(true);
+    }
     setLoading(false);
-  }, [page, search]);
+  }, [page, debouncedSearch]);
 
   useEffect(() => {
     fetchProducts();
@@ -168,7 +185,7 @@ export default function ProductsPage() {
             className="input pl-9"
             placeholder={t('products.searchPlaceholder')}
             value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            onChange={(e) => setSearch(e.target.value)}
           />
         </div>
         {search && (
@@ -195,9 +212,15 @@ export default function ProductsPage() {
             </thead>
             <tbody>
               {loading ? (
+                Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} cols={canEdit ? 8 : 7} />)
+              ) : error ? (
                 <tr>
-                  <td colSpan={8} className="p-8 text-center">
-                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600 mx-auto" />
+                  <td colSpan={8} className="p-12 text-center">
+                    <AlertCircle className="w-8 h-8 mx-auto mb-2 text-red-400" />
+                    <p className="text-gray-500 dark:text-gray-400">Не вдалося завантажити</p>
+                    <button onClick={fetchProducts} className="btn-secondary mt-3 mx-auto">
+                      <RefreshCw className="w-4 h-4" /> Повторити
+                    </button>
                   </td>
                 </tr>
               ) : products.length === 0 ? (

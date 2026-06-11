@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   DndContext,
   DragEndEvent,
@@ -19,11 +19,34 @@ import { formatCurrency, formatDate } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
-import { Phone, User, Clock } from 'lucide-react';
+import { Phone, User, Settings2, Check } from 'lucide-react';
 
-const COLUMNS: OrderStatus[] = [
-  'NEW', 'PROCESSING', 'CONFIRMED', 'SHIPPED', 'DELIVERED', 'CANCELLED',
+// All statuses that exist in the system, in pipeline order.
+const ALL_STATUSES: OrderStatus[] = [
+  'NEW',
+  'PROCESSING',
+  'CALLED',
+  'NO_ANSWER',
+  'CONFIRMED',
+  'SHIPPED',
+  'DELIVERED',
+  'RETURNED',
+  'CANCELLED',
 ];
+
+// Core pipeline columns always offered by default.
+const CORE_STATUSES: OrderStatus[] = [
+  'NEW',
+  'PROCESSING',
+  'CONFIRMED',
+  'SHIPPED',
+  'DELIVERED',
+  'CANCELLED',
+];
+
+const STORAGE_KEY = 'kanban.visibleColumns';
+// Sentinel droppable id for orders whose status has no visible column.
+const OTHER_COLUMN_ID = '__OTHER__';
 
 interface KanbanBoardProps {
   orders: Order[];
@@ -90,30 +113,41 @@ function KanbanCard({ order, isDragging }: { order: Order; isDragging?: boolean 
 }
 
 function DroppableColumn({
-  status,
+  columnId,
+  label,
+  badgeClass,
   orders,
   activeId,
+  droppable,
 }: {
-  status: OrderStatus;
+  columnId: string;
+  label: string;
+  badgeClass: string;
   orders: Order[];
   activeId: string | null;
+  droppable: boolean;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: status });
+  const { setNodeRef, isOver } = useDroppable({ id: columnId, disabled: !droppable });
+
+  const total = orders.reduce((sum, o) => sum + (o.total || 0), 0);
 
   return (
     <div className="flex flex-col w-64 shrink-0">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between mb-2 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <span
             className={cn(
-              'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
-              ORDER_STATUS_COLORS[status]
+              'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium shrink-0',
+              badgeClass
             )}
           >
-            {ORDER_STATUS_LABELS[status]}
+            {label}
           </span>
-          <span className="text-xs text-gray-400 font-medium">{orders.length}</span>
+          <span className="text-xs text-gray-400 font-medium shrink-0">{orders.length}</span>
         </div>
+        <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 truncate">
+          {formatCurrency(total)}
+        </span>
       </div>
 
       <div
@@ -146,14 +180,124 @@ export default function KanbanBoard({ orders, onOrderUpdate }: KanbanBoardProps)
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
 
+  // Local copy of statuses so a drag can be optimistic without waiting for the
+  // parent to refetch. Keyed by order id -> status. Falls back to the prop.
+  const [statusOverrides, setStatusOverrides] = useState<Record<string, OrderStatus>>({});
+
+  // Which status columns are currently visible. Persisted in localStorage.
+  const [visibleColumns, setVisibleColumns] = useState<OrderStatus[]>(CORE_STATUSES);
+  const [hydrated, setHydrated] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
+  const configRef = useRef<HTMLDivElement>(null);
+
+  // When the parent supplies fresh orders, the override for that order is no
+  // longer needed (the server value is now authoritative). Drop stale overrides.
+  useEffect(() => {
+    setStatusOverrides((prev) => {
+      if (Object.keys(prev).length === 0) return prev;
+      let changed = false;
+      const next: Record<string, OrderStatus> = {};
+      for (const order of orders) {
+        const override = prev[order.id];
+        if (override !== undefined && order.status !== override) {
+          next[order.id] = override; // server hasn't caught up yet, keep it
+        } else if (override !== undefined) {
+          changed = true; // server matches override -> drop it
+        }
+      }
+      // detect removed orders too
+      if (!changed && Object.keys(next).length === Object.keys(prev).length) return prev;
+      return next;
+    });
+  }, [orders]);
+
+  const effectiveStatus = useCallback(
+    (order: Order): OrderStatus => statusOverrides[order.id] ?? order.status,
+    [statusOverrides]
+  );
+
+  // Hydrate visible columns from localStorage. Default: core pipeline + any
+  // status that currently has orders, so nothing important is hidden on load.
+  useEffect(() => {
+    let stored: OrderStatus[] | null = null;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          stored = parsed.filter((s): s is OrderStatus =>
+            (ALL_STATUSES as string[]).includes(s)
+          );
+        }
+      }
+    } catch {
+      stored = null;
+    }
+
+    if (stored && stored.length > 0) {
+      setVisibleColumns(stored);
+    } else {
+      const withOrders = new Set(orders.map((o) => o.status));
+      const defaults = ALL_STATUSES.filter(
+        (s) => CORE_STATUSES.includes(s) || withOrders.has(s)
+      );
+      setVisibleColumns(defaults);
+    }
+    setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist visible columns once hydrated.
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(visibleColumns));
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }, [visibleColumns, hydrated]);
+
+  // Close the config popover on outside click.
+  useEffect(() => {
+    if (!configOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (configRef.current && !configRef.current.contains(e.target as Node)) {
+        setConfigOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [configOpen]);
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
 
-  const getColumnOrders = useCallback(
-    (status: OrderStatus) => orders.filter((o) => o.status === status),
-    [orders]
+  // Preserve column order, keep it stable, and drop any unknown stored values.
+  const orderedVisible = useMemo(
+    () => ALL_STATUSES.filter((s) => visibleColumns.includes(s)),
+    [visibleColumns]
   );
+
+  const visibleSet = useMemo(() => new Set(orderedVisible), [orderedVisible]);
+
+  // Orders whose (effective) status has no visible column — surfaced in "Інші"
+  // so a drag-and-drop or status filter can never make an order vanish.
+  const otherOrders = useMemo(
+    () => orders.filter((o) => !visibleSet.has(effectiveStatus(o))),
+    [orders, visibleSet, effectiveStatus]
+  );
+
+  const getColumnOrders = useCallback(
+    (status: OrderStatus) => orders.filter((o) => effectiveStatus(o) === status),
+    [orders, effectiveStatus]
+  );
+
+  const toggleColumn = (status: OrderStatus) => {
+    setVisibleColumns((prev) =>
+      prev.includes(status) ? prev.filter((s) => s !== status) : [...prev, status]
+    );
+  };
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveId(event.active.id as string);
@@ -167,32 +311,121 @@ export default function KanbanBoard({ orders, onOrderUpdate }: KanbanBoardProps)
     const { active, over } = event;
     if (!over) return;
 
+    // The "Інші" column isn't a real status target.
+    if (over.id === OTHER_COLUMN_ID) return;
+
     const orderId = active.id as string;
     const newStatus = over.id as OrderStatus;
     const order = orders.find((o) => o.id === orderId);
+    if (!order) return;
 
-    if (!order || order.status === newStatus) return;
+    const previousStatus = effectiveStatus(order);
+    if (previousStatus === newStatus) return;
+
+    // 1) Optimistically move the card to the target column.
+    setStatusOverrides((prev) => ({ ...prev, [orderId]: newStatus }));
 
     try {
+      // 2) Persist on the backend.
       await api.put(`/orders/${orderId}`, { status: newStatus });
-      toast.success(`Статус изменён: ${ORDER_STATUS_LABELS[newStatus]}`);
+      toast.success(`Статус змінено: ${ORDER_STATUS_LABELS[newStatus]}`);
+      // 3) Resync counts / data from the parent. The override is cleared once
+      //    the refetched order matches (see the orders effect above).
       onOrderUpdate();
     } catch {
-      toast.error('Ошибка при изменении статуса');
+      // Roll back to the original column.
+      setStatusOverrides((prev) => {
+        const next = { ...prev };
+        if (order.status === previousStatus) {
+          delete next[orderId];
+        } else {
+          next[orderId] = previousStatus;
+        }
+        return next;
+      });
+      toast.error('Помилка при зміні статусу');
     }
   };
 
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+      <div className="flex items-center justify-end mb-3">
+        <div className="relative" ref={configRef}>
+          <button
+            type="button"
+            onClick={() => setConfigOpen((o) => !o)}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 transition-colors"
+          >
+            <Settings2 className="w-3.5 h-3.5" />
+            Налаштувати колонки
+          </button>
+
+          {configOpen && (
+            <div className="absolute right-0 z-20 mt-2 w-56 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg p-2">
+              <p className="px-2 pt-1 pb-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                Видимі статуси
+              </p>
+              <div className="max-h-72 overflow-y-auto">
+                {ALL_STATUSES.map((status) => {
+                  const checked = visibleSet.has(status);
+                  return (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => toggleColumn(status)}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700/60 transition-colors"
+                    >
+                      <span
+                        className={cn(
+                          'w-4 h-4 rounded border flex items-center justify-center shrink-0',
+                          checked
+                            ? 'bg-primary-600 border-primary-600 text-white'
+                            : 'border-gray-300 dark:border-gray-600'
+                        )}
+                      >
+                        {checked && <Check className="w-3 h-3" />}
+                      </span>
+                      <span
+                        className={cn(
+                          'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
+                          ORDER_STATUS_COLORS[status]
+                        )}
+                      >
+                        {ORDER_STATUS_LABELS[status]}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="flex gap-4 overflow-x-auto pb-4">
-        {COLUMNS.map((status) => (
+        {orderedVisible.map((status) => (
           <DroppableColumn
             key={status}
-            status={status}
+            columnId={status}
+            label={ORDER_STATUS_LABELS[status]}
+            badgeClass={ORDER_STATUS_COLORS[status]}
             orders={getColumnOrders(status)}
             activeId={activeId}
+            droppable
           />
         ))}
+
+        {/* Catch-all so orders with a hidden status are never lost. */}
+        {otherOrders.length > 0 && (
+          <DroppableColumn
+            columnId={OTHER_COLUMN_ID}
+            label="Інші"
+            badgeClass="bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-200"
+            orders={otherOrders}
+            activeId={activeId}
+            droppable={false}
+          />
+        )}
       </div>
 
       <DragOverlay>

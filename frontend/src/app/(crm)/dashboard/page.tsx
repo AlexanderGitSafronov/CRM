@@ -38,6 +38,7 @@ import Sparkline from '@/components/Sparkline';
 import SlaBadge from '@/components/SlaBadge';
 import AchievementsCard from '@/components/AchievementsCard';
 import GoalsCard from '@/components/GoalsCard';
+import { Skeleton, SkeletonCard } from '@/components/ui/Skeleton';
 import dynamic from 'next/dynamic';
 
 // Leaflet is browser-only — dynamically loaded with no SSR
@@ -70,6 +71,7 @@ export default function DashboardPage() {
   const [chartData, setChartData] = useState<DayData[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const loadData = async (silent = false) => {
@@ -86,7 +88,12 @@ export default function DashboardPage() {
       setChartData(chartRes.data);
       setKpi(kpiRes.data);
       setLastUpdated(new Date());
-    } catch {}
+      setError(false);
+    } catch {
+      // Show inline error only on the initial load; silent refreshes keep stale data.
+      if (!silent) setError(true);
+      else if (!lastUpdated) setError(true);
+    }
     setLoading(false);
     setRefreshing(false);
   };
@@ -107,8 +114,57 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
+      <div className="p-6 space-y-6">
+        <div className="space-y-2">
+          <Skeleton className="h-7 w-64" />
+          <Skeleton className="h-4 w-48" />
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="card p-4 flex items-center gap-3">
+              <Skeleton className="h-9 w-9 rounded-lg shrink-0" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-3 w-2/3" />
+                <Skeleton className="h-5 w-1/2" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </div>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="card p-5 space-y-4">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-[220px] w-full" />
+          </div>
+          <div className="card p-5 space-y-4">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-[220px] w-full" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
       <div className="p-6 flex items-center justify-center min-h-[400px]">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
+        <div className="card p-8 max-w-sm w-full text-center">
+          <div className="w-12 h-12 rounded-xl bg-red-50 dark:bg-red-900/20 flex items-center justify-center mx-auto mb-3">
+            <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
+          </div>
+          <p className="font-semibold text-gray-900 dark:text-white">Не вдалося завантажити</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Перевірте з'єднання та спробуйте ще раз.
+          </p>
+          <button onClick={() => loadData(false)} className="btn-primary mt-5 mx-auto">
+            <RefreshCw className="w-4 h-4" />
+            Повторити
+          </button>
+        </div>
       </div>
     );
   }

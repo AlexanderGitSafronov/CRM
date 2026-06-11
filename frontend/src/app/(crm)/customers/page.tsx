@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import api from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import Pagination from '@/components/ui/Pagination';
+import { SkeletonRow } from '@/components/ui/Skeleton';
 import type { Customer, Pagination as PaginationType } from '@/types';
-import { Search, Users, Phone, Mail, MapPin, TrendingUp, RefreshCw, X, ShieldAlert, Upload } from 'lucide-react';
+import { Search, Users, Phone, Mail, MapPin, TrendingUp, RefreshCw, X, ShieldAlert, Upload, AlertCircle } from 'lucide-react';
 import CsvImport from '@/components/CsvImport';
 import { useT } from '@/stores/localeStore';
 
@@ -15,31 +16,38 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [pagination, setPagination] = useState<PaginationType>({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
-  const searchTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  // Debounce the search input: fetch only fires 400ms after typing stops.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const fetchCustomers = useCallback(async () => {
     setLoading(true);
+    setError(false);
     try {
       const res = await api.get('/customers', {
-        params: { page, limit: 20, ...(search && { search }) },
+        params: { page, limit: 20, ...(debouncedSearch && { search: debouncedSearch }) },
       });
       setCustomers(res.data.customers);
       setPagination(res.data.pagination);
-    } catch {}
+    } catch {
+      setError(true);
+    }
     setLoading(false);
-  }, [page, search]);
+  }, [page, debouncedSearch]);
 
   useEffect(() => {
     fetchCustomers();
   }, [fetchCustomers]);
-
-  const handleSearch = (value: string) => {
-    setSearch(value);
-    clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => setPage(1), 400);
-  };
 
   const [importOpen, setImportOpen] = useState(false);
 
@@ -63,11 +71,11 @@ export default function CustomersPage() {
             className="input pl-9"
             placeholder={t('customers.searchPlaceholder')}
             value={search}
-            onChange={(e) => handleSearch(e.target.value)}
+            onChange={(e) => setSearch(e.target.value)}
           />
         </div>
         {search && (
-          <button onClick={() => { setSearch(''); setPage(1); }} className="btn-secondary px-2">
+          <button onClick={() => setSearch('')} className="btn-secondary px-2">
             <X className="w-4 h-4" />
           </button>
         )}
@@ -92,9 +100,15 @@ export default function CustomersPage() {
             </thead>
             <tbody>
               {loading ? (
+                Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} cols={7} />)
+              ) : error ? (
                 <tr>
-                  <td colSpan={7} className="p-8 text-center">
-                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600 mx-auto" />
+                  <td colSpan={7} className="p-12 text-center">
+                    <AlertCircle className="w-8 h-8 mx-auto mb-2 text-red-400" />
+                    <p className="text-gray-500 dark:text-gray-400">Не вдалося завантажити</p>
+                    <button onClick={fetchCustomers} className="btn-secondary mt-3 mx-auto">
+                      <RefreshCw className="w-4 h-4" /> Повторити
+                    </button>
                   </td>
                 </tr>
               ) : customers.length === 0 ? (

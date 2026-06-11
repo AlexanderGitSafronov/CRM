@@ -5,6 +5,7 @@ import api from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import Modal from '@/components/ui/Modal';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { Skeleton } from '@/components/ui/Skeleton';
 import type { Expense } from '@/types';
 import { EXPENSE_CATEGORY_LABELS } from '@/types';
 import toast from 'react-hot-toast';
@@ -19,6 +20,8 @@ import {
   Trash2,
   Calendar,
   Download,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -121,6 +124,7 @@ export default function AnalyticsPage() {
   const [totalExpenses, setTotalExpenses] = useState(0);
   const [summary, setSummary] = useState({ revenue: 0, orders: 0, profit: 0 });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [showExpenseForm, setShowExpenseForm] = useState(false);
   const [deleteExpenseId, setDeleteExpenseId] = useState<string | null>(null);
   const [expenseForm, setExpenseForm] = useState({
@@ -142,6 +146,7 @@ export default function AnalyticsPage() {
 
   const fetchData = async () => {
     setLoading(true);
+    setError(false);
     const params = buildDateParams();
     try {
       const [dayRes, managerRes, conversionRes, sourceRes, productRes, expenseRes, summaryRes, redemptionRes, ltvRes] = await Promise.all([
@@ -166,7 +171,9 @@ export default function AnalyticsPage() {
       setLtv(ltvRes.data);
       const s = summaryRes.data;
       setSummary({ revenue: s.revenue, orders: s.orders.total, profit: s.profit });
-    } catch {}
+    } catch {
+      setError(true);
+    }
     setLoading(false);
   };
 
@@ -254,6 +261,25 @@ export default function AnalyticsPage() {
           </button>
         </div>
       </div>
+
+      {/* Inline error state */}
+      {error && !loading && (
+        <div className="card p-5 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-red-50 dark:bg-red-900/20 flex items-center justify-center shrink-0">
+            <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
+          </div>
+          <div className="flex-1">
+            <p className="font-semibold text-gray-900 dark:text-white">Не вдалося завантажити</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Перевірте з'єднання та спробуйте ще раз.
+            </p>
+          </div>
+          <button onClick={fetchData} className="btn-primary shrink-0">
+            <RefreshCw className="w-4 h-4" />
+            Повторити
+          </button>
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -356,9 +382,7 @@ export default function AnalyticsPage() {
         <div className="card p-5">
           <h2 className="font-semibold text-gray-900 dark:text-white mb-4">Динамика выручки</h2>
           {loading ? (
-            <div className="h-[250px] flex items-center justify-center">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
-            </div>
+            <Skeleton className="h-[250px] w-full" />
           ) : (
             <ResponsiveContainer width="100%" height={250}>
               <AreaChart data={byDay}>
@@ -385,9 +409,7 @@ export default function AnalyticsPage() {
         <div className="card p-5">
           <h2 className="font-semibold text-gray-900 dark:text-white mb-4">Заказы по дням</h2>
           {loading ? (
-            <div className="h-[250px] flex items-center justify-center">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
-            </div>
+            <Skeleton className="h-[250px] w-full" />
           ) : (
             <ResponsiveContainer width="100%" height={250}>
               <BarChart data={byDay}>
@@ -415,8 +437,10 @@ export default function AnalyticsPage() {
             <h2 className="font-semibold text-gray-900 dark:text-white">Продажи по менеджерам</h2>
           </div>
           {loading ? (
-            <div className="h-[200px] flex items-center justify-center">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
             </div>
           ) : byManager.length === 0 ? (
             <p className="text-gray-400 text-sm text-center py-8">Нет данных</p>
@@ -452,8 +476,10 @@ export default function AnalyticsPage() {
           <h2 className="font-semibold text-gray-900 dark:text-white">Товары: ROI и % выкупа</h2>
         </div>
         {loading ? (
-          <div className="h-[120px] flex items-center justify-center">
-            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
+          <div className="space-y-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} className="h-6 w-full" />
+            ))}
           </div>
         ) : byProduct.length === 0 ? (
           <p className="text-gray-400 text-sm text-center py-8">Нет данных</p>
@@ -511,9 +537,7 @@ export default function AnalyticsPage() {
             <h2 className="font-semibold text-gray-900 dark:text-white">Заявки по каналах</h2>
           </div>
           {loading ? (
-            <div className="h-[220px] flex items-center justify-center">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
-            </div>
+            <Skeleton className="h-[220px] w-full" />
           ) : bySource.length === 0 ? (
             <p className="text-gray-400 text-sm text-center py-10">Немає даних</p>
           ) : (
@@ -555,8 +579,10 @@ export default function AnalyticsPage() {
             <h2 className="font-semibold text-gray-900 dark:text-white">Виручка по каналах</h2>
           </div>
           {loading ? (
-            <div className="h-[220px] flex items-center justify-center">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-7 w-full" />
+              ))}
             </div>
           ) : bySource.length === 0 ? (
             <p className="text-gray-400 text-sm text-center py-10">Немає даних</p>
@@ -606,8 +632,10 @@ export default function AnalyticsPage() {
           <span className="text-xs text-gray-400 ml-1">NEW → CONFIRMED</span>
         </div>
         {loading ? (
-          <div className="flex justify-center py-10">
-            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600" />
+          <div className="p-5 space-y-3">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
           </div>
         ) : conversionByManager.length === 0 ? (
           <p className="text-gray-400 text-sm text-center py-8">Немає даних за обраний період</p>

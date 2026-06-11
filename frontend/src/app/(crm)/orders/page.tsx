@@ -11,6 +11,8 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import OrderForm from '@/components/orders/OrderForm';
 import KanbanBoard from '@/components/orders/KanbanBoard';
 import BulkTtnModal from '@/components/orders/BulkTtnModal';
+import { SkeletonRow } from '@/components/ui/Skeleton';
+import useHotkeys from '@/hooks/useHotkeys';
 import type { Order, OrderStatus, Pagination as PaginationType, User } from '@/types';
 import { ORDER_STATUS_LABELS, ORDER_SOURCE_LABELS } from '@/types';
 import toast from 'react-hot-toast';
@@ -25,6 +27,7 @@ import {
   Download,
   CheckSquare,
   ChevronDown,
+  ChevronUp,
   X,
   RefreshCw,
   Clock,
@@ -35,6 +38,7 @@ import {
   Printer,
   PhoneOff,
   PackageX,
+  AlertCircle,
 } from 'lucide-react';
 import SlaBadge from '@/components/SlaBadge';
 import SavedOrderViews, { OrderFilters } from '@/components/SavedOrderViews';
@@ -64,6 +68,17 @@ const STATUSES: OrderStatus[] = [
   'NEW', 'PROCESSING', 'CONFIRMED', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'RETURNED',
 ];
 
+type SortField = 'orderNum' | 'total' | 'createdAt' | 'status';
+type SortOrder = 'asc' | 'desc';
+
+// Map a sortable table header to the API sort field. Headers not listed here aren't sortable.
+const SORT_FIELDS: Partial<Record<string, SortField>> = {
+  orderNum: 'orderNum',
+  total: 'total',
+  createdAt: 'createdAt',
+  status: 'status',
+};
+
 export default function OrdersPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -73,6 +88,7 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [pagination, setPagination] = useState<PaginationType>({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [view, setView] = useState<'table' | 'kanban'>('table');
   const [managers, setManagers] = useState<User[]>([]);
 
@@ -80,14 +96,26 @@ export default function OrdersPage() {
   const [counters, setCounters] = useState<OrdersCounters>({ slaOverdue: 0, noTtn: 0, noAnswer: 0 });
   const [activeChip, setActiveChip] = useState<ActiveChip>(null);
 
-  // Filters
-  const [search, setSearch] = useState('');
+  // Filters — initialised from the URL so filtered views survive refresh / back and are shareable
+  const [search, setSearch] = useState(searchParams.get('search') || '');
+  // The debounced search value the fetch actually depends on (D1)
+  const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get('search') || '');
   const [status, setStatus] = useState(searchParams.get('status') || '');
-  const [managerId, setManagerId] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [hasTtn, setHasTtn] = useState<'' | 'true' | 'false'>('');
-  const [page, setPage] = useState(1);
+  const [managerId, setManagerId] = useState(searchParams.get('managerId') || '');
+  const [dateFrom, setDateFrom] = useState(searchParams.get('dateFrom') || '');
+  const [dateTo, setDateTo] = useState(searchParams.get('dateTo') || '');
+  const [hasTtn, setHasTtn] = useState<'' | 'true' | 'false'>(
+    (searchParams.get('hasTtn') as '' | 'true' | 'false') || ''
+  );
+  const [page, setPage] = useState(Number(searchParams.get('page')) || 1);
+
+  // Sorting (D3) — default createdAt desc; backend honours sortBy/sortOrder
+  const [sortBy, setSortBy] = useState<SortField>(
+    (SORT_FIELDS[searchParams.get('sortBy') || ''] as SortField) || 'createdAt'
+  );
+  const [sortOrder, setSortOrder] = useState<SortOrder>(
+    searchParams.get('sortOrder') === 'asc' ? 'asc' : 'desc'
+  );
 
   // Saved view
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
@@ -97,6 +125,14 @@ export default function OrdersPage() {
   const [bulkStatus, setBulkStatus] = useState('');
   const [showBulkMenu, setShowBulkMenu] = useState(false);
 
+  // Bulk confirm (D4)
+  const [confirmBulkStatus, setConfirmBulkStatus] = useState<string | null>(null);
+  const [confirmBulkAssign, setConfirmBulkAssign] = useState<{ mid: string | null; name: string } | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Keyboard navigation (D6)
+  const [focusIndex, setFocusIndex] = useState(-1);
+
   // Modals
   const [createModal, setCreateModal] = useState(false);
   const [bulkTtnModal, setBulkTtnModal] = useState(false);
@@ -105,6 +141,9 @@ export default function OrdersPage() {
   const [printLoading, setPrintLoading] = useState(false);
 
   const searchTimer = useRef<ReturnType<typeof setTimeout>>();
+  const urlTimer = useRef<ReturnType<typeof setTimeout>>();
+  const didMount = useRef(false);
+  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
 
   const fetchCounters = useCallback(() => {
     api.get('/orders/counters')
@@ -114,27 +153,30 @@ export default function OrdersPage() {
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
       const params = {
         page,
         limit: view === 'kanban' ? 200 : 20,
-        ...(search && { search }),
+        ...(debouncedSearch && { search: debouncedSearch }),
         ...(status && { status }),
         ...(managerId && { managerId }),
         ...(dateFrom && { dateFrom }),
         ...(dateTo && { dateTo }),
         ...(hasTtn && { hasTtn }),
-        sortBy: 'createdAt',
-        sortOrder: 'desc',
+        sortBy,
+        sortOrder,
       };
       const res = await api.get('/orders', { params });
       setOrders(res.data.orders);
       setPagination(res.data.pagination);
-    } catch {}
+    } catch {
+      setLoadError(true);
+    }
     setLoading(false);
     // Refresh chip counts every time the list reloads
     fetchCounters();
-  }, [page, search, status, managerId, dateFrom, dateTo, hasTtn, view, fetchCounters]);
+  }, [page, debouncedSearch, status, managerId, dateFrom, dateTo, hasTtn, sortBy, sortOrder, view, fetchCounters]);
 
   useEffect(() => {
     fetchOrders();
@@ -144,10 +186,55 @@ export default function OrdersPage() {
     api.get('/users').then((res) => setManagers(res.data)).catch(() => {});
   }, []);
 
+  // D1: debounce the actual search VALUE — only one request fires after typing stops.
+  useEffect(() => {
+    if (search === debouncedSearch) return;
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(searchTimer.current);
+  }, [search, debouncedSearch]);
+
+  // D2: mirror filters/sort into the URL (debounced) so views survive refresh/back & are shareable.
+  useEffect(() => {
+    // Skip the very first run — state was already hydrated from the URL on mount.
+    if (!didMount.current) {
+      didMount.current = true;
+      return;
+    }
+    clearTimeout(urlTimer.current);
+    urlTimer.current = setTimeout(() => {
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      if (status) params.set('status', status);
+      if (managerId) params.set('managerId', managerId);
+      if (dateFrom) params.set('dateFrom', dateFrom);
+      if (dateTo) params.set('dateTo', dateTo);
+      if (hasTtn) params.set('hasTtn', hasTtn);
+      if (sortBy !== 'createdAt') params.set('sortBy', sortBy);
+      if (sortOrder !== 'desc') params.set('sortOrder', sortOrder);
+      if (page > 1) params.set('page', String(page));
+      const qs = params.toString();
+      router.replace(qs ? `?${qs}` : '?', { scroll: false });
+    }, 300);
+    return () => clearTimeout(urlTimer.current);
+  }, [search, status, managerId, dateFrom, dateTo, hasTtn, sortBy, sortOrder, page, router]);
+
+  // D3: toggle a column's sort; clicking a new column starts at desc.
+  const toggleSort = (field: SortField) => {
+    if (sortBy === field) {
+      setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(field);
+      setSortOrder('desc');
+    }
+    setPage(1);
+  };
+
   const handleSearchChange = (value: string) => {
     setSearch(value);
-    clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => setPage(1), 400);
   };
 
   // Orders matching the current selection, in current page order
@@ -188,34 +275,92 @@ export default function OrdersPage() {
     setPrintLoading(false);
   };
 
-  const handleBulkStatus = async () => {
-    if (!selected.length || !bulkStatus) return;
+  // Re-apply a previous status snapshot: group orders by their prior status -> one bulk call each.
+  const undoBulkStatus = async (prev: Record<string, OrderStatus>, toastId: string) => {
+    toast.dismiss(toastId);
+    const byStatus = new Map<OrderStatus, string[]>();
+    for (const [id, st] of Object.entries(prev)) {
+      const list = byStatus.get(st) || [];
+      list.push(id);
+      byStatus.set(st, list);
+    }
     try {
-      await api.post('/orders/bulk-status', { ids: selected, status: bulkStatus });
-      toast.success(`${selected.length} заказов обновлено`);
+      await Promise.all(
+        Array.from(byStatus.entries()).map(([st, ids]) =>
+          api.post('/orders/bulk-status', { ids, status: st })
+        )
+      );
+      toast.success('Статуси повернено');
+      fetchOrders();
+    } catch {
+      toast.error('Не вдалося скасувати');
+    }
+  };
+
+  // D4: actually run the bulk status change (called after ConfirmDialog), then offer an undo toast.
+  const performBulkStatus = async (newStatus: string) => {
+    if (!selected.length || !newStatus) return;
+    // Snapshot previous statuses of the affected orders for undo.
+    const prevStatuses: Record<string, OrderStatus> = {};
+    for (const o of orders) {
+      if (selected.includes(o.id)) prevStatuses[o.id] = o.status;
+    }
+    setBulkBusy(true);
+    try {
+      await api.post('/orders/bulk-status', { ids: selected, status: newStatus });
+      const count = selected.length;
       setSelected([]);
       setBulkStatus('');
       setShowBulkMenu(false);
+      setConfirmBulkStatus(null);
       fetchOrders();
+      toast.success(
+        (tt) => (
+          <span className="flex items-center gap-3">
+            <span>{count} замовлень оновлено</span>
+            <button
+              onClick={() => undoBulkStatus(prevStatuses, tt.id)}
+              className="font-semibold text-primary-600 hover:underline"
+            >
+              Скасувати
+            </button>
+          </span>
+        ),
+        { duration: 10000 }
+      );
     } catch {
       toast.error('Ошибка при обновлении');
+      setConfirmBulkStatus(null);
     }
+    setBulkBusy(false);
   };
 
   const [showBulkAssign, setShowBulkAssign] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
 
-  const handleBulkAssign = async (mid: string | null) => {
+  const performBulkAssign = async (mid: string | null) => {
     if (!selected.length) return;
+    setBulkBusy(true);
     try {
       await api.post('/orders/bulk-assign', { ids: selected, managerId: mid });
       toast.success(`Призначено: ${selected.length}`);
       setSelected([]);
       setShowBulkAssign(false);
+      setConfirmBulkAssign(null);
       fetchOrders();
     } catch {
       toast.error('Помилка призначення');
+      setConfirmBulkAssign(null);
     }
+    setBulkBusy(false);
+  };
+
+  // Open the assign confirm dialog (resolving a human-readable target name for the prompt).
+  const requestBulkAssign = (mid: string | null) => {
+    if (!selected.length) return;
+    setShowBulkAssign(false);
+    const name = mid ? (managers.find((m) => m.id === mid)?.name || 'менеджера') : 'без менеджера';
+    setConfirmBulkAssign({ mid, name });
   };
 
   const handleBulkDelete = async () => {
@@ -281,6 +426,7 @@ export default function OrdersPage() {
 
   const clearFilters = () => {
     setSearch('');
+    setDebouncedSearch('');
     setStatus('');
     setManagerId('');
     setDateFrom('');
@@ -293,6 +439,7 @@ export default function OrdersPage() {
 
   const applyView = (f: OrderFilters) => {
     setSearch(f.search || '');
+    setDebouncedSearch(f.search || '');
     setStatus(f.status || '');
     setManagerId(f.managerId || '');
     setDateFrom(f.dateFrom || '');
@@ -312,6 +459,7 @@ export default function OrdersPage() {
     setActiveChip(chip);
     setActiveViewId(null);
     setSearch('');
+    setDebouncedSearch('');
     setManagerId('');
     setDateFrom('');
     setDateTo('');
@@ -340,13 +488,86 @@ export default function OrdersPage() {
   const hasFilters = search || status || managerId || dateFrom || dateTo || hasTtn;
   const canEdit = user?.role !== 'VIEWER';
 
+  // D6: any open modal/dialog should suspend list hotkeys.
+  const anyModalOpen =
+    createModal ||
+    bulkTtnModal ||
+    !!deleteId ||
+    bulkDeleteConfirm ||
+    confirmBulkStatus !== null ||
+    confirmBulkAssign !== null;
+
+  // Reset / clamp the keyboard focus when the visible rows change.
+  useEffect(() => {
+    setFocusIndex((i) => (orders.length === 0 ? -1 : Math.min(i, orders.length - 1)));
+  }, [orders]);
+
+  const moveFocus = (delta: number) => {
+    if (!orders.length) return;
+    setFocusIndex((i) => {
+      const next = Math.max(0, Math.min(orders.length - 1, (i < 0 ? (delta > 0 ? -1 : 0) : i) + delta));
+      rowRefs.current[next]?.scrollIntoView({ block: 'nearest' });
+      return next;
+    });
+  };
+
+  useHotkeys(
+    {
+      // Keys are normalised to lowercase by the hook (e.g. Enter -> 'enter').
+      j: () => moveFocus(1),
+      k: () => moveFocus(-1),
+      enter: () => {
+        const o = orders[focusIndex];
+        if (o) router.push(`/orders/${o.id}`);
+      },
+      n: () => {
+        if (canEdit) setCreateModal(true);
+      },
+    },
+    { enabled: view === 'table' && !anyModalOpen }
+  );
+
+  // D3: a clickable, sortable column header with an up/down chevron on the active column.
+  const SortHeader = ({ field, label, className = '' }: { field: SortField; label: string; className?: string }) => {
+    const active = sortBy === field;
+    return (
+      <th className={`text-left table-header p-3 ${className}`}>
+        <button
+          onClick={() => toggleSort(field)}
+          className="inline-flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+          title="Сортувати"
+        >
+          {label}
+          {active && (
+            sortOrder === 'asc'
+              ? <ChevronUp className="w-3.5 h-3.5 text-primary-600" />
+              : <ChevronDown className="w-3.5 h-3.5 text-primary-600" />
+          )}
+        </button>
+      </th>
+    );
+  };
+
   return (
     <div className="p-4 sm:p-6 space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-center gap-3">
         <div>
           <h1 className="text-xl font-bold text-gray-900 dark:text-white">{t('orders.title')}</h1>
-          <p className="text-sm text-gray-400">{pagination.total} {t('orders.count')}</p>
+          <p className="text-sm text-gray-400 flex items-center gap-2">
+            <span>{pagination.total} {t('orders.count')}</span>
+            {view === 'table' && (
+              <span className="hidden lg:inline text-xs text-gray-400">
+                <kbd className="px-1 py-0.5 rounded border border-gray-200 dark:border-gray-700 font-mono">j</kbd>
+                <kbd className="ml-1 px-1 py-0.5 rounded border border-gray-200 dark:border-gray-700 font-mono">k</kbd>
+                <span className="mx-1">навігація</span>
+                <kbd className="px-1 py-0.5 rounded border border-gray-200 dark:border-gray-700 font-mono">Enter</kbd>
+                <span className="mx-1">відкрити</span>
+                <kbd className="px-1 py-0.5 rounded border border-gray-200 dark:border-gray-700 font-mono">n</kbd>
+                <span className="ml-1">новий</span>
+              </span>
+            )}
+          </p>
         </div>
         <div className="ml-auto flex items-center gap-2 flex-wrap">
           {/* View toggle */}
@@ -541,7 +762,7 @@ export default function OrdersPage() {
                 {STATUSES.map((s) => (
                   <button
                     key={s}
-                    onClick={() => { setBulkStatus(s); setShowBulkMenu(false); setTimeout(handleBulkStatus, 0); }}
+                    onClick={() => { setShowBulkMenu(false); setConfirmBulkStatus(s); }}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                   >
                     {ORDER_STATUS_LABELS[s]}
@@ -565,7 +786,7 @@ export default function OrdersPage() {
                 {showBulkAssign && (
                   <div className="absolute top-full mt-1 left-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10 w-56 max-h-72 overflow-y-auto">
                     <button
-                      onClick={() => handleBulkAssign(null)}
+                      onClick={() => requestBulkAssign(null)}
                       className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-500"
                     >
                       ✕ Зняти менеджера
@@ -574,7 +795,7 @@ export default function OrdersPage() {
                     {managers.filter((m) => ['ADMIN', 'MANAGER', 'CALL_CENTER'].includes(m.role)).map((m) => (
                       <button
                         key={m.id}
-                        onClick={() => handleBulkAssign(m.id)}
+                        onClick={() => requestBulkAssign(m.id)}
                         className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
                       >
                         {m.name} <span className="text-xs text-gray-400">({m.role})</span>
@@ -625,6 +846,13 @@ export default function OrdersPage() {
       {/* Content */}
       {view === 'kanban' ? (
         <div className="card p-4">
+          {/* D7: kanban loads at most 200 — warn when the board is truncated */}
+          {!loading && pagination.total > orders.length && (
+            <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              Показано {orders.length} з {pagination.total} — уточніть фільтри
+            </div>
+          )}
           {loading ? (
             <div className="flex justify-center py-16">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
@@ -647,22 +875,30 @@ export default function OrdersPage() {
                       className="rounded border-gray-300"
                     />
                   </th>
-                  <th className="text-left table-header p-3">№</th>
+                  <SortHeader field="orderNum" label="№" />
                   <th className="text-left table-header p-3">Клиент</th>
                   <th className="text-left table-header p-3 hidden md:table-cell">Товары</th>
-                  <th className="text-left table-header p-3">Сумма</th>
-                  <th className="text-left table-header p-3">Статус</th>
+                  <SortHeader field="total" label="Сумма" />
+                  <SortHeader field="status" label="Статус" />
                   <th className="text-left table-header p-3 hidden sm:table-cell">Источник</th>
                   <th className="text-left table-header p-3 hidden lg:table-cell">Менеджер</th>
-                  <th className="text-left table-header p-3 hidden xl:table-cell">Дата</th>
+                  <SortHeader field="createdAt" label="Дата" className="hidden xl:table-cell" />
                   <th className="p-3 w-10" />
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
+                  // D5: skeleton placeholder rows instead of a spinner
+                  Array.from({ length: 8 }).map((_, i) => <SkeletonRow key={i} cols={10} />)
+                ) : loadError ? (
                   <tr>
-                    <td colSpan={10} className="p-8 text-center">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600 mx-auto" />
+                    <td colSpan={10} className="p-12 text-center text-gray-500 dark:text-gray-400">
+                      <AlertCircle className="w-8 h-8 mx-auto mb-2 text-rose-400" />
+                      <p className="mb-3">Не вдалося завантажити замовлення</p>
+                      <button onClick={fetchOrders} className="btn-secondary text-sm mx-auto">
+                        <RefreshCw className="w-4 h-4" />
+                        Повторити
+                      </button>
                     </td>
                   </tr>
                 ) : orders.length === 0 ? (
@@ -678,12 +914,17 @@ export default function OrdersPage() {
                     </td>
                   </tr>
                 ) : (
-                  orders.map((order) => {
+                  orders.map((order, idx) => {
                     const overdue = isOverdueSla(order);
+                    const focused = idx === focusIndex;
                     return (
                     <tr
                       key={order.id}
+                      ref={(el) => { rowRefs.current[idx] = el; }}
+                      onClick={() => setFocusIndex(idx)}
                       className={`border-b transition-colors ${
+                        focused ? 'ring-2 ring-inset ring-primary-500 ' : ''
+                      }${
                         overdue
                           ? 'border-red-100 dark:border-red-900/40 bg-red-50/50 dark:bg-red-900/10 hover:bg-red-50 dark:hover:bg-red-900/20'
                           : 'border-gray-50 dark:border-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-800/30'
@@ -823,6 +1064,30 @@ export default function OrdersPage() {
         onClose={() => setBulkDeleteConfirm(false)}
         onConfirm={handleBulkDelete}
         message={`Видалити ${selected.length} заказів? Це незворотно.`}
+      />
+
+      {/* D4: confirm bulk status change */}
+      <ConfirmDialog
+        open={confirmBulkStatus !== null}
+        onClose={() => setConfirmBulkStatus(null)}
+        onConfirm={() => confirmBulkStatus && performBulkStatus(confirmBulkStatus)}
+        title="Зміна статусу"
+        message={`Змінити статус ${selected.length} замовлень${
+          confirmBulkStatus ? ` на «${ORDER_STATUS_LABELS[confirmBulkStatus as OrderStatus]}»` : ''
+        }?`}
+        confirmLabel="Змінити"
+        loading={bulkBusy}
+      />
+
+      {/* D4: confirm bulk assign */}
+      <ConfirmDialog
+        open={confirmBulkAssign !== null}
+        onClose={() => setConfirmBulkAssign(null)}
+        onConfirm={() => confirmBulkAssign && performBulkAssign(confirmBulkAssign.mid)}
+        title="Призначення менеджера"
+        message={`Призначити ${selected.length} замовлень: ${confirmBulkAssign?.name ?? ''}?`}
+        confirmLabel="Призначити"
+        loading={bulkBusy}
       />
     </div>
   );

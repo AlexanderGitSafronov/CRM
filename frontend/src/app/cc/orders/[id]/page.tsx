@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import NovaPoshtaSelect from '@/components/nova-poshta/NovaPoshtaSelect';
+import useHotkeys from '@/hooks/useHotkeys';
 
 const DELIVERY_SERVICES = [
   { value: 'NOVA_POSHTA', label: 'Нова Пошта' },
@@ -215,6 +216,19 @@ function CcOrderDetailContent() {
     setSaving(false);
   };
 
+  // Хоткеї оператора: 1–4 — статус дзвінка (у показаному порядку), Cmd/Ctrl+Enter — зберегти.
+  // Цифри ігноруються під час набору в полях (поведінка useHotkeys), mod+enter — спрацьовує і в полях.
+  useHotkeys(
+    {
+      '1': () => order && setStatus((prev) => (prev === CC_STATUSES[0].value ? order.status : CC_STATUSES[0].value)),
+      '2': () => order && setStatus((prev) => (prev === CC_STATUSES[1].value ? order.status : CC_STATUSES[1].value)),
+      '3': () => order && setStatus((prev) => (prev === CC_STATUSES[2].value ? order.status : CC_STATUSES[2].value)),
+      '4': () => order && setStatus((prev) => (prev === CC_STATUSES[3].value ? order.status : CC_STATUSES[3].value)),
+      'mod+enter': () => handleSave(),
+    },
+    { enabled: !loading && !saving }
+  );
+
   if (loading) {
     return (
       <div className="flex justify-center py-20">
@@ -357,7 +371,7 @@ function CcOrderDetailContent() {
           <div className="card p-4">
             <h2 className="font-semibold text-gray-900 dark:text-white mb-3">Статус дзвінка</h2>
             <div className="grid grid-cols-2 gap-2">
-              {CC_STATUSES.map((s) => {
+              {CC_STATUSES.map((s, i) => {
                 const Icon = s.icon;
                 const isActive = status === s.value;
                 return (
@@ -365,12 +379,23 @@ function CcOrderDetailContent() {
                     key={s.value}
                     onClick={() => setStatus(isActive ? order.status : s.value)}
                     className={cn(
-                      'flex items-center gap-2 px-3 py-3 rounded-xl border-2 text-sm font-medium transition-all',
+                      'relative flex items-center gap-2 px-3 py-3 rounded-xl border-2 text-sm font-medium transition-all',
                       isActive ? s.active : s.color
                     )}
                   >
                     <Icon className="w-4 h-4 shrink-0" />
                     {s.label}
+                    <kbd
+                      aria-hidden
+                      className={cn(
+                        'absolute top-1 right-1 hidden sm:inline-flex items-center justify-center h-4 min-w-[1rem] px-1 rounded text-[10px] font-semibold leading-none border',
+                        isActive
+                          ? 'border-white/40 text-white/80'
+                          : 'border-gray-200 dark:border-gray-700 text-gray-400'
+                      )}
+                    >
+                      {i + 1}
+                    </kbd>
                   </button>
                 );
               })}
@@ -711,6 +736,12 @@ function CcOrderDetailContent() {
             }
             {fromQueue ? 'Зберегти і далі' : 'Зберегти'}
             {fromQueue && !saving && <ArrowRight className="w-4 h-4" />}
+            <kbd
+              aria-hidden
+              className="hidden sm:inline-flex items-center justify-center h-5 px-1.5 ml-1 rounded text-[10px] font-semibold leading-none border border-white/40 text-white/80"
+            >
+              ⌘↵
+            </kbd>
           </button>
         </div>
       </div>
