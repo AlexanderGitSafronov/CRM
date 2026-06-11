@@ -39,6 +39,14 @@ export default function CustomersMap() {
         link.setAttribute('data-leaflet-css', '1');
         document.head.appendChild(link);
       }
+      // Style for the permanent order-count label sitting on each bubble
+      if (!document.querySelector('style[data-om-label]')) {
+        const style = document.createElement('style');
+        style.setAttribute('data-om-label', '1');
+        style.textContent =
+          '.om-count-label{background:transparent;border:none;box-shadow:none;color:#fff;font-weight:700;font-size:11px;line-height:1;text-shadow:0 1px 2px rgba(0,0,0,.45);padding:0;}.om-count-label:before{display:none!important;}';
+        document.head.appendChild(style);
+      }
       if (cancelled || !containerRef.current) return;
 
       const map = Lany.map(containerRef.current, {
@@ -57,17 +65,32 @@ export default function CustomersMap() {
         })
         .filter((x): x is NonNullable<typeof x> => x !== null);
 
-      const maxOrders = Math.max(...aggregated.map((a) => a.orders), 1);
+      // Proportional symbols: circle AREA grows with order volume (so radius ~ √count),
+      // in ABSOLUTE terms — 1 order is always a small dot, busy cities clearly stand out,
+      // regardless of how the other cities compare. Color ramps cool→hot by absolute count.
+      const radiusFor = (orders: number) =>
+        Math.max(7, Math.min(34, 5 + Math.sqrt(orders) * 5.5));
+      const styleFor = (orders: number) => {
+        if (orders >= 25) return { fill: '#b91c1c', opacity: 0.82 }; // deep red
+        if (orders >= 10) return { fill: '#ef4444', opacity: 0.74 }; // red
+        if (orders >= 5) return { fill: '#f59e0b', opacity: 0.68 };  // amber
+        if (orders >= 2) return { fill: '#fbbf24', opacity: 0.58 };  // light amber
+        return { fill: '#60a5fa', opacity: 0.55 };                   // blue (1)
+      };
       for (const a of aggregated) {
-        const r = 8 + (a.orders / maxOrders) * 24;
-        const intensity = a.orders / maxOrders;
-        const fill = intensity > 0.66 ? '#dc2626' : intensity > 0.33 ? '#f59e0b' : '#3b82f6';
+        const { fill, opacity } = styleFor(a.orders);
         const circle = Lany.circleMarker([a.lat, a.lng], {
-          radius: r,
+          radius: radiusFor(a.orders),
           fillColor: fill,
           color: '#fff',
-          weight: 2,
-          fillOpacity: 0.65,
+          weight: 1.5,
+          fillOpacity: opacity,
+        });
+        // permanent count label centered on the bubble for at-a-glance reading
+        circle.bindTooltip(String(a.orders), {
+          permanent: true,
+          direction: 'center',
+          className: 'om-count-label',
         });
         circle.bindPopup(`<div style="font-family:system-ui;min-width:160px;">
           <div style="font-weight:600;margin-bottom:4px;">${a.name}</div>
@@ -112,7 +135,18 @@ export default function CustomersMap() {
         </div>
         <span className="text-xs text-gray-400">{data.length} міст</span>
       </div>
-      <div ref={containerRef} className="w-full h-80 bg-gray-50 dark:bg-gray-800/40" />
+      <div className="relative">
+        <div ref={containerRef} className="w-full h-80 bg-gray-50 dark:bg-gray-800/40" />
+        <div className="pointer-events-none absolute bottom-2 right-2 z-[500] flex items-center gap-1.5 rounded-lg bg-white/85 dark:bg-gray-900/80 px-2.5 py-1.5 text-[10px] text-gray-500 dark:text-gray-300 shadow-sm backdrop-blur">
+          <span>менше</span>
+          <span className="inline-block rounded-full" style={{ width: 8, height: 8, background: '#60a5fa' }} />
+          <span className="inline-block rounded-full" style={{ width: 11, height: 11, background: '#fbbf24' }} />
+          <span className="inline-block rounded-full" style={{ width: 14, height: 14, background: '#f59e0b' }} />
+          <span className="inline-block rounded-full" style={{ width: 17, height: 17, background: '#ef4444' }} />
+          <span className="inline-block rounded-full" style={{ width: 20, height: 20, background: '#b91c1c' }} />
+          <span>більше замовлень</span>
+        </div>
+      </div>
       {top.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-5 border-t border-gray-100 dark:border-gray-800">
           {top.map((c, i) => (
