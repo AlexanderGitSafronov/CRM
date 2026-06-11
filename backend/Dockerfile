@@ -28,4 +28,7 @@ COPY prisma ./prisma
 
 EXPOSE 3001
 
-CMD ["sh", "-c", "npx prisma db push && node dist/index.js"]
+# Schema sync is intentionally NOT run on container start: `prisma db push` on
+# schema drift can silently DROP columns (tenant data loss). Run it explicitly
+# as a deliberate deploy step: `npx prisma db push` (or use migrations).
+CMD ["node", "dist/index.js"]

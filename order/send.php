@@ -22,7 +22,16 @@ $utm_content  = $_POST['utm_content']  ?? '';
 
 $notes = implode(' | ', array_filter([$utm_source, $utm_medium, $utm_campaign, $utm_term, $utm_content]));
 
-// Відправляємо в CRM
+// Відправляємо в CRM — endpoint і токен тільки з оточення, ніяких хардкодів
+$webhookUrl   = getenv('CRM_WEBHOOK_URL');
+$webhookToken = getenv('CRM_WEBHOOK_TOKEN');
+
+if (empty($webhookUrl) || empty($webhookToken)) {
+    error_log('order/send.php: CRM_WEBHOOK_URL or CRM_WEBHOOK_TOKEN is not configured');
+    echo '<p style="color:red;text-align:center;font-family:sans-serif;padding:40px">Сталася помилка. Спробуйте пізніше. <a href="javascript:history.back()">Назад</a></p>';
+    exit;
+}
+
 $payload = json_encode([
     'customer' => [
         'name'  => $name,
@@ -40,7 +49,7 @@ $payload = json_encode([
 ]);
 
 $ch = curl_init();
-curl_setopt($ch, CURLOPT_URL,            'http://localhost:3001/api/webhook/order');
+curl_setopt($ch, CURLOPT_URL,            $webhookUrl);
 curl_setopt($ch, CURLOPT_POST,           1);
 curl_setopt($ch, CURLOPT_POSTFIELDS,     $payload);
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
@@ -48,10 +57,24 @@ curl_setopt($ch, CURLOPT_TIMEOUT,        10);
 curl_setopt($ch, CURLOPT_HTTPHEADER,     [
     'Content-Type: application/json',
     'Accept: application/json',
-    'X-Webhook-Token: demo-webhook-token-change-in-production',
+    'X-Webhook-Token: ' . $webhookToken,
 ]);
 curl_exec($ch);
+$curlErrno = curl_errno($ch);
+$curlError = curl_error($ch);
+$httpCode  = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
+
+if ($curlErrno !== 0 || $httpCode >= 400) {
+    error_log(sprintf(
+        'order/send.php: webhook delivery failed (curl errno %d: %s; HTTP %d)',
+        $curlErrno,
+        $curlError,
+        $httpCode
+    ));
+    echo '<p style="color:red;text-align:center;font-family:sans-serif;padding:40px">Сталася помилка при відправці замовлення. Спробуйте пізніше. <a href="javascript:history.back()">Назад</a></p>';
+    exit;
+}
 ?>
 <!DOCTYPE html>
 <html lang="uk">
