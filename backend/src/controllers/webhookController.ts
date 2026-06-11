@@ -195,6 +195,33 @@ export const receiveOrder = async (req: Request, res: Response) => {
     })
   );
 
+  // Детекция дублей: если у этого же клиента (по customerId в этой орг) есть
+  // другой ещё «живой» заказ за последние 48ч — помечаем новый заказ ссылкой
+  // duplicateOfId на самый свежий такой заказ. Ничего не блокируем и не отменяем —
+  // UI просто показывает бейдж. Обёрнуто в try/catch, чтобы не ломать приём заказа.
+  try {
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const priorOpen = await prisma.order.findFirst({
+      where: {
+        organizationId: orgId,
+        customerId,
+        id: { not: order.id },
+        status: { in: ['NEW', 'CALLED', 'NO_ANSWER', 'PROCESSING'] },
+        createdAt: { gte: cutoff },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    if (priorOpen) {
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { duplicateOfId: priorOpen.id },
+      });
+    }
+  } catch {
+    // не критично — приём заказа продолжается без метки дубля
+  }
+
   broadcastEvent(orgId, 'new_order', { orderNum: order.orderNum, source });
 
   await notifyNewOrder({

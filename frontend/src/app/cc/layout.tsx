@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore } from '@/stores/authStore';
-import { Phone, LogOut, Zap, Bell, Volume2, VolumeX, BarChart2 } from 'lucide-react';
+import { Phone, LogOut, Zap, Bell, Volume2, VolumeX, BarChart2, ListChecks } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -48,6 +48,7 @@ export default function CcLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user, _hasHydrated, logout } = useAuthStore();
   const [newOrdersCount, setNewOrdersCount] = useState(0);
+  const [queueCount, setQueueCount] = useState(0);
   // Default OFF — first click on the icon enables sound AND unlocks AudioContext
   const [soundEnabled, setSoundEnabled] = useState(false);
   const soundEnabledRef = useRef(soundEnabled);
@@ -81,6 +82,14 @@ export default function CcLayout({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
+  // Fetch queue size (callback + sla + noanswer) so operators see how many need attention
+  const fetchQueueCount = useCallback(async () => {
+    try {
+      const res = await api.get('/orders/queue');
+      setQueueCount((res.data.items ?? []).length);
+    } catch {}
+  }, []);
+
   useEffect(() => {
     if (!_hasHydrated) return;
     if (!user) {
@@ -94,7 +103,12 @@ export default function CcLayout({ children }: { children: React.ReactNode }) {
     if (!user) return;
 
     fetchNewCount();
-    window.addEventListener('cc:status_changed', fetchNewCount);
+    fetchQueueCount();
+    const refreshCounts = () => {
+      fetchNewCount();
+      fetchQueueCount();
+    };
+    window.addEventListener('cc:status_changed', refreshCounts);
 
     let es: EventSource | null = null;
     let cancelled = false;
@@ -133,6 +147,7 @@ export default function CcLayout({ children }: { children: React.ReactNode }) {
         });
 
         fetchNewCount();
+        fetchQueueCount();
         window.dispatchEvent(new CustomEvent('cc:new_order'));
       });
 
@@ -150,10 +165,10 @@ export default function CcLayout({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      window.removeEventListener('cc:status_changed', fetchNewCount);
+      window.removeEventListener('cc:status_changed', refreshCounts);
       es?.close();
     };
-  }, [user, fetchNewCount]);
+  }, [user, fetchNewCount, fetchQueueCount]);
 
   if (!_hasHydrated || !user) {
     return (
@@ -183,6 +198,23 @@ export default function CcLayout({ children }: { children: React.ReactNode }) {
 
           {/* Nav tabs */}
           <nav className="flex items-center gap-1 ml-4">
+            <Link
+              href="/cc/queue"
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                pathname === '/cc/queue'
+                  ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-400'
+                  : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+              )}
+            >
+              <ListChecks className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Черга</span>
+              {queueCount > 0 && (
+                <span className="ml-0.5 min-w-[1.25rem] px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none text-center">
+                  {queueCount}
+                </span>
+              )}
+            </Link>
             <Link
               href="/cc/orders"
               className={cn(

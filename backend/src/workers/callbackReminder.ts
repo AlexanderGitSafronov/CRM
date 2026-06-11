@@ -18,14 +18,15 @@ export async function runCallbackCheck(): Promise<{ reminded: number; errors: nu
 
   try {
     const now = new Date();
-    const windowEnd = new Date(now.getTime() + 5 * 60 * 1000);
 
     const due = await prisma.callback.findMany({
-      where: { done: false, scheduledAt: { gte: now, lte: windowEnd } },
+      where: { done: false, notifiedAt: null, scheduledAt: { lte: now } },
       include: {
         order: { select: { orderNum: true, customer: { select: { name: true, phone: true } } } },
         manager: { select: { id: true, name: true } },
       },
+      orderBy: { scheduledAt: 'asc' },
+      take: 200,
     });
 
     for (const cb of due) {
@@ -54,6 +55,11 @@ export async function runCallbackCheck(): Promise<{ reminded: number; errors: nu
             });
           }
         }
+
+        await prisma.callback.update({
+          where: { id: cb.id },
+          data: { notifiedAt: new Date() },
+        });
 
         result.reminded++;
       } catch (err) {

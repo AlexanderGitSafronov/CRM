@@ -10,6 +10,7 @@ import Pagination from '@/components/ui/Pagination';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import OrderForm from '@/components/orders/OrderForm';
 import KanbanBoard from '@/components/orders/KanbanBoard';
+import BulkTtnModal from '@/components/orders/BulkTtnModal';
 import type { Order, OrderStatus, Pagination as PaginationType, User } from '@/types';
 import { ORDER_STATUS_LABELS, ORDER_SOURCE_LABELS } from '@/types';
 import toast from 'react-hot-toast';
@@ -30,11 +31,29 @@ import {
   Truck,
   UserCheck,
   Trash2,
+  Copy,
+  Printer,
+  PhoneOff,
+  PackageX,
 } from 'lucide-react';
 import SlaBadge from '@/components/SlaBadge';
 import SavedOrderViews, { OrderFilters } from '@/components/SavedOrderViews';
 
 const SLA_HOURS = 2;
+
+// Extra fields delivered by the API (see batch-3 contract) that aren't yet on the shared Order type.
+type OrderRow = Order & {
+  duplicateOfId?: string | null;
+  duplicateOfNum?: number | null;
+};
+
+interface OrdersCounters {
+  slaOverdue: number;
+  noTtn: number;
+  noAnswer: number;
+}
+
+type ActiveChip = 'sla' | 'noTtn' | 'noAnswer' | null;
 
 function isOverdueSla(order: Order): boolean {
   if (order.status !== 'NEW') return false;
@@ -51,11 +70,15 @@ export default function OrdersPage() {
   const { user } = useAuthStore();
   const t = useT();
 
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<OrderRow[]>([]);
   const [pagination, setPagination] = useState<PaginationType>({ total: 0, page: 1, limit: 20, pages: 0 });
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<'table' | 'kanban'>('table');
   const [managers, setManagers] = useState<User[]>([]);
+
+  // Smart chips
+  const [counters, setCounters] = useState<OrdersCounters>({ slaOverdue: 0, noTtn: 0, noAnswer: 0 });
+  const [activeChip, setActiveChip] = useState<ActiveChip>(null);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -63,6 +86,7 @@ export default function OrdersPage() {
   const [managerId, setManagerId] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [hasTtn, setHasTtn] = useState<'' | 'true' | 'false'>('');
   const [page, setPage] = useState(1);
 
   // Saved view
@@ -75,10 +99,18 @@ export default function OrdersPage() {
 
   // Modals
   const [createModal, setCreateModal] = useState(false);
+  const [bulkTtnModal, setBulkTtnModal] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [printLoading, setPrintLoading] = useState(false);
 
   const searchTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  const fetchCounters = useCallback(() => {
+    api.get('/orders/counters')
+      .then((res) => setCounters(res.data))
+      .catch(() => {});
+  }, []);
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
@@ -91,6 +123,7 @@ export default function OrdersPage() {
         ...(managerId && { managerId }),
         ...(dateFrom && { dateFrom }),
         ...(dateTo && { dateTo }),
+        ...(hasTtn && { hasTtn }),
         sortBy: 'createdAt',
         sortOrder: 'desc',
       };
@@ -99,7 +132,9 @@ export default function OrdersPage() {
       setPagination(res.data.pagination);
     } catch {}
     setLoading(false);
-  }, [page, search, status, managerId, dateFrom, dateTo, view]);
+    // Refresh chip counts every time the list reloads
+    fetchCounters();
+  }, [page, search, status, managerId, dateFrom, dateTo, hasTtn, view, fetchCounters]);
 
   useEffect(() => {
     fetchOrders();
@@ -115,26 +150,42 @@ export default function OrdersPage() {
     searchTimer.current = setTimeout(() => setPage(1), 400);
   };
 
-  const [bulkTtnLoading, setBulkTtnLoading] = useState(false);
+  // Orders matching the current selection, in current page order
+  const selectedOrders = orders.filter((o) => selected.includes(o.id));
+  // Selected orders that already have a TTN (eligible for combined print)
+  const printableIds = selectedOrders.filter((o) => o.trackingNumber).map((o) => o.id);
 
-  const handleBulkTtn = async () => {
-    if (!selected.length) return;
-    setBulkTtnLoading(true);
+  const handleBulkPrint = async () => {
+    if (!printableIds.length) return;
+    setPrintLoading(true);
     try {
-      const res = await api.post('/nova-poshta/bulk-create-ttn', {
-        orderIds: selected,
-        weight: 1,
-        description: 'Товар',
-        payerType: 'Recipient',
+      const res = await api.get('/nova-poshta/print-ttn', {
+        params: { orderIds: printableIds.join(','), format: 'pdf', size: '100x100' },
+        responseType: 'blob',
       });
-      const { success, failed } = res.data as { success: number; failed: number };
-      toast.success(`ТТН: ${success} створено${failed ? `, ${failed} помилок` : ''}`);
-      setSelected([]);
-      fetchOrders();
-    } catch {
-      toast.error('Помилка масового TTN');
+      const blobUrl = URL.createObjectURL(res.data);
+      const w = window.open(blobUrl, '_blank');
+      if (!w) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `TTN-${new Date().toISOString().split('T')[0]}.pdf`;
+        a.click();
+      }
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (err: unknown) {
+      let msg = 'Помилка друку';
+      const errResp = (err as { response?: { data?: unknown } })?.response;
+      if (errResp?.data instanceof Blob) {
+        try {
+          const j = JSON.parse(await errResp.data.text());
+          msg = j.error || msg;
+        } catch { /* keep default */ }
+      } else if (typeof errResp?.data === 'object' && errResp.data && 'error' in errResp.data) {
+        msg = (errResp.data as { error: string }).error;
+      }
+      toast.error(msg);
     }
-    setBulkTtnLoading(false);
+    setPrintLoading(false);
   };
 
   const handleBulkStatus = async () => {
@@ -234,6 +285,8 @@ export default function OrdersPage() {
     setManagerId('');
     setDateFrom('');
     setDateTo('');
+    setHasTtn('');
+    setActiveChip(null);
     setPage(1);
     setActiveViewId(null);
   };
@@ -244,7 +297,36 @@ export default function OrdersPage() {
     setManagerId(f.managerId || '');
     setDateFrom(f.dateFrom || '');
     setDateTo(f.dateTo || '');
+    setHasTtn('');
+    setActiveChip(null);
     setPage(1);
+  };
+
+  // Smart chips: each toggles a curated combination of existing filters
+  const applyChip = (chip: Exclude<ActiveChip, null>) => {
+    // Toggle off if already active -> back to a clean slate
+    if (activeChip === chip) {
+      clearFilters();
+      return;
+    }
+    setActiveChip(chip);
+    setActiveViewId(null);
+    setSearch('');
+    setManagerId('');
+    setDateFrom('');
+    setDateTo('');
+    setPage(1);
+    if (chip === 'sla') {
+      // Overdue SLA = NEW orders that have aged past the SLA window (visually flagged in-row)
+      setStatus('NEW');
+      setHasTtn('');
+    } else if (chip === 'noTtn') {
+      setStatus('CONFIRMED');
+      setHasTtn('false');
+    } else if (chip === 'noAnswer') {
+      setStatus('NO_ANSWER');
+      setHasTtn('');
+    }
   };
 
   const currentFilters: OrderFilters = {
@@ -255,7 +337,7 @@ export default function OrdersPage() {
     ...(dateTo && { dateTo }),
   };
 
-  const hasFilters = search || status || managerId || dateFrom || dateTo;
+  const hasFilters = search || status || managerId || dateFrom || dateTo || hasTtn;
   const canEdit = user?.role !== 'VIEWER';
 
   return (
@@ -305,6 +387,66 @@ export default function OrdersPage() {
         onActiveViewChange={setActiveViewId}
       />
 
+      {/* Smart chips — quick triage by live counters */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={() => applyChip('sla')}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border transition-colors ${
+            activeChip === 'sla'
+              ? 'border-rose-500 bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400 font-medium'
+              : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-rose-300'
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5" />
+          Прострочені SLA
+          <span className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1 rounded-full text-xs font-semibold ${
+            activeChip === 'sla'
+              ? 'bg-rose-600 text-white'
+              : 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-400'
+          }`}>
+            {counters.slaOverdue}
+          </span>
+        </button>
+
+        <button
+          onClick={() => applyChip('noTtn')}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border transition-colors ${
+            activeChip === 'noTtn'
+              ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400 font-medium'
+              : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-orange-300'
+          }`}
+        >
+          <PackageX className="w-3.5 h-3.5" />
+          Без ТТН
+          <span className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1 rounded-full text-xs font-semibold ${
+            activeChip === 'noTtn'
+              ? 'bg-orange-600 text-white'
+              : 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400'
+          }`}>
+            {counters.noTtn}
+          </span>
+        </button>
+
+        <button
+          onClick={() => applyChip('noAnswer')}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border transition-colors ${
+            activeChip === 'noAnswer'
+              ? 'border-amber-500 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 font-medium'
+              : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-amber-300'
+          }`}
+        >
+          <PhoneOff className="w-3.5 h-3.5" />
+          Недозвони
+          <span className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1 rounded-full text-xs font-semibold ${
+            activeChip === 'noAnswer'
+              ? 'bg-amber-600 text-white'
+              : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400'
+          }`}>
+            {counters.noAnswer}
+          </span>
+        </button>
+      </div>
+
       {/* Filters */}
       <div className="card p-3">
         <div className="flex flex-wrap gap-3">
@@ -321,12 +463,23 @@ export default function OrdersPage() {
           <select
             className="input w-auto"
             value={status}
-            onChange={(e) => { setStatus(e.target.value); setPage(1); }}
+            onChange={(e) => { setStatus(e.target.value); setActiveChip(null); setPage(1); }}
           >
             <option value="">{t('orders.allStatuses')}</option>
             {STATUSES.map((s) => (
               <option key={s} value={s}>{ORDER_STATUS_LABELS[s]}</option>
             ))}
+          </select>
+
+          <select
+            className="input w-auto"
+            value={hasTtn}
+            onChange={(e) => { setHasTtn(e.target.value as '' | 'true' | 'false'); setActiveChip(null); setPage(1); }}
+            title="ТТН"
+          >
+            <option value="">Усі ТТН</option>
+            <option value="true">З ТТН</option>
+            <option value="false">Без ТТН</option>
           </select>
 
           <select
@@ -432,12 +585,21 @@ export default function OrdersPage() {
               </div>
 
               <button
-                onClick={handleBulkTtn}
-                disabled={bulkTtnLoading}
+                onClick={() => setBulkTtnModal(true)}
                 className="btn-secondary text-sm flex items-center gap-1.5 text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-800 hover:bg-orange-50 dark:hover:bg-orange-900/20"
               >
                 <Truck className="w-3.5 h-3.5" />
-                {bulkTtnLoading ? 'Створення...' : 'Створити ТТН'}
+                Створити ТТН
+              </button>
+
+              <button
+                onClick={handleBulkPrint}
+                disabled={printLoading || printableIds.length === 0}
+                title={printableIds.length === 0 ? 'Немає ТТН для друку серед обраних' : `Друк ${printableIds.length} ТТН одним PDF`}
+                className="btn-secondary text-sm flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                {printLoading ? 'Друк...' : `Друк ТТН${printableIds.length ? ` (${printableIds.length})` : ''}`}
               </button>
 
               {user?.role === 'ADMIN' && (
@@ -544,6 +706,26 @@ export default function OrdersPage() {
                             #{order.orderNum}
                           </Link>
                           <SlaBadge status={order.status} createdAt={order.createdAt} />
+                          {order.duplicateOfNum != null && (
+                            order.duplicateOfId ? (
+                              <Link
+                                href={`/orders/${order.duplicateOfId}`}
+                                title="Можливий дублікат"
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 hover:bg-orange-200 dark:hover:bg-orange-900/50 transition-colors"
+                              >
+                                <Copy className="w-3 h-3" />
+                                Дубль #{order.duplicateOfNum}
+                              </Link>
+                            ) : (
+                              <span
+                                title="Можливий дублікат"
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"
+                              >
+                                <Copy className="w-3 h-3" />
+                                Дубль #{order.duplicateOfNum}
+                              </span>
+                            )
+                          )}
                         </div>
                       </td>
                       <td className="p-3">
@@ -619,6 +801,13 @@ export default function OrdersPage() {
         open={createModal}
         onClose={() => setCreateModal(false)}
         onSuccess={fetchOrders}
+      />
+
+      <BulkTtnModal
+        open={bulkTtnModal}
+        onClose={() => setBulkTtnModal(false)}
+        orders={selectedOrders}
+        onDone={fetchOrders}
       />
 
       <ConfirmDialog

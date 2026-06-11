@@ -32,6 +32,7 @@ const ORDER_SELECT = {
   npWarehouseRef: true,
   trackingNumber: true,
   cancelReason: true,
+  duplicateOfId: true,
   // Attribution для AdTrack (видно в API чтобы UI мог отображать)
   utmSource: true,
   utmMedium: true,
@@ -60,6 +61,36 @@ const ORDER_SELECT = {
   },
 };
 
+// O5: автоперезвон при недозвоне. При переходе в NO_ANSWER (если предыдущий статус
+// не NO_ANSWER) планируем перезвон через 2 часа. Не плодим больше 3 попыток.
+// Полностью изолировано try/catch — сбой создания перезвона не ломает смену статуса.
+async function autoCreateNoAnswerCallback(
+  orgId: string,
+  orderId: string,
+  managerId: string | null | undefined
+): Promise<void> {
+  try {
+    const existingCount = await prisma.callback.count({ where: { orderId, organizationId: orgId } });
+    const attempt = existingCount + 1;
+    if (attempt > 3) {
+      // 3 попытки уже было — 4-ю не создаём (оставляем менеджеру решать вручную).
+      return;
+    }
+    await prisma.callback.create({
+      data: {
+        organizationId: orgId,
+        orderId,
+        managerId: managerId || null,
+        scheduledAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
+        note: 'Автоперезвон (недозвон)',
+        attempt,
+      },
+    });
+  } catch {
+    // намеренно глотаем — автоперезвон не должен ломать апдейт заказа
+  }
+}
+
 export const getOrders = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const {
@@ -67,6 +98,7 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
     managerId,
     search,
     source,
+    hasTtn,
     dateFrom,
     dateTo,
     page = '1',
@@ -85,6 +117,11 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
   }
   if (source) {
     where.source = source;
+  }
+  if (hasTtn === 'true') {
+    where.trackingNumber = { not: null };
+  } else if (hasTtn === 'false') {
+    where.trackingNumber = null;
   }
   if (search) {
     where.OR = [
@@ -122,8 +159,25 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
     prisma.order.count({ where }),
   ]);
 
+  // O2: одним батч-запросом резолвим orderNum заказов-дубликатов для текущей страницы.
+  const dupIds = Array.from(
+    new Set(orders.map((o) => o.duplicateOfId).filter((v): v is string => Boolean(v)))
+  );
+  const dupNumById = new Map<string, number>();
+  if (dupIds.length > 0) {
+    const dupOrders = await prisma.order.findMany({
+      where: { id: { in: dupIds }, organizationId: orgId },
+      select: { id: true, orderNum: true },
+    });
+    for (const d of dupOrders) dupNumById.set(d.id, d.orderNum);
+  }
+  const ordersWithDup = orders.map((o) => ({
+    ...o,
+    duplicateOfNum: o.duplicateOfId ? dupNumById.get(o.duplicateOfId) ?? null : null,
+  }));
+
   return res.json({
-    orders,
+    orders: ordersWithDup,
     pagination: {
       total,
       page: pageNum,
@@ -153,7 +207,17 @@ export const getOrder = async (req: AuthRequest, res: Response) => {
     return res.status(404).json({ error: 'Заказ не найден' });
   }
 
-  return res.json(order);
+  // O2: резолвим номер заказа-дубликата (мягкая ссылка, не relation).
+  let duplicateOfNum: number | null = null;
+  if (order.duplicateOfId) {
+    const dup = await prisma.order.findFirst({
+      where: { id: order.duplicateOfId, organizationId: orgId },
+      select: { orderNum: true },
+    });
+    duplicateOfNum = dup?.orderNum ?? null;
+  }
+
+  return res.json({ ...order, duplicateOfNum });
 };
 
 export const createOrder = async (req: AuthRequest, res: Response) => {
@@ -433,6 +497,14 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     void sendOrderStatusByIdToAdtrack(id, status);
   }
 
+  // O5: автоперезвон при переходе в NO_ANSWER (prev != NO_ANSWER).
+  // Менеджер для перезвона — обновлённый, если задан в этом апдейте, иначе текущий.
+  if (statusChanged && status === 'NO_ANSWER' && existing.status !== 'NO_ANSWER') {
+    const callbackManagerId =
+      (updateData.managerId as string | null | undefined) ?? existing.managerId;
+    void autoCreateNoAnswerCallback(orgId, id, callbackManagerId);
+  }
+
   await logActivity({
     organizationId: orgId,
     userId: req.user?.id,
@@ -464,7 +536,7 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
 
   const existing = await prisma.order.findFirst({
     where: { id, organizationId: orgId },
-    select: { status: true, orderNum: true, total: true },
+    select: { status: true, orderNum: true, total: true, managerId: true },
   });
 
   if (!existing) {
@@ -541,6 +613,11 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
   // AdTrack: смены статуса из call-center (CALLED/NO_ANSWER не пойдут — мапа их игнорит).
   if (status && status !== existing.status) {
     void sendOrderStatusByIdToAdtrack(id, status);
+  }
+
+  // O5: автоперезвон при переходе оператора КЦ в NO_ANSWER (prev != NO_ANSWER).
+  if (status && status === 'NO_ANSWER' && existing.status !== 'NO_ANSWER') {
+    void autoCreateNoAnswerCallback(orgId, id, existing.managerId);
   }
 
   await logActivity({
@@ -754,4 +831,160 @@ export const getOrderHistory = async (req: AuthRequest, res: Response) => {
   });
 
   return res.json(history);
+};
+
+// SLA-порог берём из той же env, что и slaTracker (по умолчанию 2 часа).
+const SLA_NEW_ORDER_HOURS = Number(process.env.SLA_NEW_ORDER_HOURS || 2);
+
+// O3: счётчики для шапки списка заказов (org-scoped).
+export const getOrderCounters = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const slaThreshold = new Date(Date.now() - SLA_NEW_ORDER_HOURS * 60 * 60 * 1000);
+
+  const [slaOverdue, noTtn, noAnswer] = await Promise.all([
+    prisma.order.count({
+      where: { organizationId: orgId, status: 'NEW', createdAt: { lte: slaThreshold } },
+    }),
+    prisma.order.count({
+      where: { organizationId: orgId, status: 'CONFIRMED', trackingNumber: null },
+    }),
+    prisma.order.count({
+      where: { organizationId: orgId, status: 'NO_ANSWER' },
+    }),
+  ]);
+
+  return res.json({ slaOverdue, noTtn, noAnswer });
+};
+
+// O4: приоритизированный список «кому звонить» (callback > sla > noanswer).
+// Один заказ появляется один раз с самой приоритетной причиной.
+const QUEUE_CAP = 50;
+const REASON_PRIORITY: Record<'callback' | 'sla' | 'noanswer', number> = {
+  callback: 0,
+  sla: 1,
+  noanswer: 2,
+};
+
+export const getOrderQueue = async (req: AuthRequest, res: Response) => {
+  const orgId = req.user!.organizationId;
+  const slaThreshold = new Date(Date.now() - SLA_NEW_ORDER_HOURS * 60 * 60 * 1000);
+
+  // (a) перезвоны, которые уже наступили
+  const dueCallbacks = await prisma.callback.findMany({
+    where: { organizationId: orgId, done: false, scheduledAt: { lte: new Date() } },
+    orderBy: { scheduledAt: 'asc' },
+    take: QUEUE_CAP,
+    select: {
+      orderId: true,
+      scheduledAt: true,
+      order: {
+        select: {
+          id: true,
+          orderNum: true,
+          status: true,
+          customer: { select: { name: true, phone: true } },
+        },
+      },
+    },
+  });
+
+  // (b) NEW-заказы старше SLA, (c) NO_ANSWER-заказы
+  const [slaOrders, noAnswerOrders] = await Promise.all([
+    prisma.order.findMany({
+      where: { organizationId: orgId, status: 'NEW', createdAt: { lte: slaThreshold } },
+      orderBy: { createdAt: 'asc' },
+      take: QUEUE_CAP,
+      select: {
+        id: true,
+        orderNum: true,
+        status: true,
+        createdAt: true,
+        customer: { select: { name: true, phone: true } },
+      },
+    }),
+    prisma.order.findMany({
+      where: { organizationId: orgId, status: 'NO_ANSWER' },
+      orderBy: { createdAt: 'asc' },
+      take: QUEUE_CAP,
+      select: {
+        id: true,
+        orderNum: true,
+        status: true,
+        createdAt: true,
+        customer: { select: { name: true, phone: true } },
+      },
+    }),
+  ]);
+
+  type QueueItem = {
+    id: string;
+    orderNum: number;
+    customerName: string;
+    phone: string;
+    status: string;
+    reason: 'callback' | 'sla' | 'noanswer';
+    scheduledAt: Date | null;
+    // для сортировки по возрасту внутри причины
+    _age: Date;
+  };
+
+  const byOrder = new Map<string, QueueItem>();
+
+  const consider = (item: QueueItem) => {
+    const prev = byOrder.get(item.id);
+    // оставляем причину с наивысшим приоритетом (callback < sla < noanswer по индексу)
+    if (!prev || REASON_PRIORITY[item.reason] < REASON_PRIORITY[prev.reason]) {
+      byOrder.set(item.id, item);
+    }
+  };
+
+  for (const c of dueCallbacks) {
+    if (!c.order) continue;
+    consider({
+      id: c.order.id,
+      orderNum: c.order.orderNum,
+      customerName: c.order.customer?.name || '',
+      phone: c.order.customer?.phone || '',
+      status: c.order.status,
+      reason: 'callback',
+      scheduledAt: c.scheduledAt,
+      _age: c.scheduledAt,
+    });
+  }
+  for (const o of slaOrders) {
+    consider({
+      id: o.id,
+      orderNum: o.orderNum,
+      customerName: o.customer?.name || '',
+      phone: o.customer?.phone || '',
+      status: o.status,
+      reason: 'sla',
+      scheduledAt: null,
+      _age: o.createdAt,
+    });
+  }
+  for (const o of noAnswerOrders) {
+    consider({
+      id: o.id,
+      orderNum: o.orderNum,
+      customerName: o.customer?.name || '',
+      phone: o.customer?.phone || '',
+      status: o.status,
+      reason: 'noanswer',
+      scheduledAt: null,
+      _age: o.createdAt,
+    });
+  }
+
+  const items = Array.from(byOrder.values())
+    .sort((a, b) => {
+      const pr = REASON_PRIORITY[a.reason] - REASON_PRIORITY[b.reason];
+      if (pr !== 0) return pr;
+      // внутри причины — старейшие первыми
+      return a._age.getTime() - b._age.getTime();
+    })
+    .slice(0, QUEUE_CAP)
+    .map(({ _age, ...rest }) => rest);
+
+  return res.json({ items });
 };

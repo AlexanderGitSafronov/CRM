@@ -52,6 +52,10 @@ router.post('/', requireRole('ADMIN', 'MANAGER', 'CALL_CENTER'), async (req: Aut
 
   const assignedManagerId = managerId || order.managerId || req.user?.id;
 
+  const priorCount = await prisma.callback.count({
+    where: { organizationId: orgId, orderId },
+  });
+
   const callback = await prisma.callback.create({
     data: {
       organizationId: orgId,
@@ -59,6 +63,7 @@ router.post('/', requireRole('ADMIN', 'MANAGER', 'CALL_CENTER'), async (req: Aut
       managerId: assignedManagerId || null,
       scheduledAt: new Date(scheduledAt),
       note: note?.trim() || null,
+      attempt: priorCount + 1,
     },
     include: {
       order: { select: { orderNum: true, customer: { select: { name: true, phone: true } } } },

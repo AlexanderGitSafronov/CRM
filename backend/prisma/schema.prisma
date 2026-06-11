@@ -199,6 +199,12 @@ model Order {
   trackingNumber  String?
   cancelReason    String?
 
+  // Мягкая ссылка на заказ-дубликат (тот же клиент/товар). НЕ FK/relation —
+  // просто nullable строка с id другого заказа, чтобы избежать миграционной сложности.
+  duplicateOfId   String?
+  // Стоимость доставки (грн), если её несёт продавец. Nullable/additive.
+  shippingCost    Float?
+
   // Attribution для AdTrack (приходит из Magaz/лендинга с заказом)
   utmSource         String?
   utmMedium         String?
@@ -371,6 +377,10 @@ model Callback {
   note           String?
   done           Boolean   @default(false)
   doneAt         DateTime?
+  // Дедуп уведомления о наступившем перезвоне (для воркера/напоминаний).
+  notifiedAt     DateTime?
+  // Номер попытки дозвона (1-я, 2-я, 3-я). Автоперезвоны не плодятся свыше 3.
+  attempt        Int       @default(1)
   createdAt      DateTime  @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)

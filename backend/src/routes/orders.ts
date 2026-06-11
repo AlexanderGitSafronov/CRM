@@ -10,6 +10,8 @@ import {
   bulkAssignManager,
   bulkDelete,
   getOrderHistory,
+  getOrderCounters,
+  getOrderQueue,
 } from '../controllers/orderController';
 import { authenticate, requireRole } from '../middleware/auth';
 
@@ -18,6 +20,9 @@ const router = Router();
 router.use(authenticate);
 
 router.get('/', getOrders);
+// Спец-маршруты до '/:id', иначе param-роут перехватит 'counters'/'queue'.
+router.get('/counters', getOrderCounters);
+router.get('/queue', getOrderQueue);
 router.post('/', requireRole('ADMIN', 'MANAGER'), createOrder);
 router.post('/bulk-status', requireRole('ADMIN', 'MANAGER'), bulkUpdateStatus);
 router.post('/bulk-assign', requireRole('ADMIN', 'MANAGER'), bulkAssignManager);

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useState, useEffect, Suspense } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import api from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { StatusBadge } from '@/components/ui/Badge';
@@ -9,6 +9,7 @@ import { ORDER_STATUS_LABELS, type Order, type OrderStatus } from '@/types';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft,
+  ArrowRight,
   Phone,
   Package,
   MessageSquare,
@@ -78,9 +79,12 @@ const CC_STATUSES: {
   },
 ];
 
-export default function CcOrderDetailPage() {
+function CcOrderDetailContent() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Чи прийшов оператор із черги — тоді після збереження ведемо до наступної заявки
+  const fromQueue = searchParams.get('from') === 'queue';
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -165,6 +169,22 @@ export default function CcOrderDetailPage() {
     } catch { toast.error('Помилка'); }
   };
 
+  // Після збереження зі стану «черга» — ведемо оператора до наступної заявки,
+  // не повертаючи його у список (робота дзвінок-за-дзвінком)
+  const goToNextInQueue = async () => {
+    try {
+      const res = await api.get('/orders/queue');
+      const items: { id: string }[] = res.data.items ?? [];
+      const next = items.find((it) => it.id !== id);
+      if (next) {
+        router.push(`/cc/orders/${next.id}?from=queue`);
+        return;
+      }
+    } catch { /* ignore — впадемо у фолбек нижче */ }
+    toast.success('Черга порожня 🎉');
+    router.push('/cc/orders');
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -186,6 +206,9 @@ export default function CcOrderDetailPage() {
       setCustomUpsell('');
       toast.success('Збережено');
       window.dispatchEvent(new CustomEvent('cc:status_changed'));
+      if (fromQueue) {
+        await goToNextInQueue();
+      }
     } catch {
       toast.error('Помилка збереження');
     }
@@ -219,7 +242,7 @@ export default function CcOrderDetailPage() {
       {/* Back + header */}
       <div className="flex items-center gap-3">
         <button
-          onClick={() => router.push('/cc/orders')}
+          onClick={() => router.push(fromQueue ? '/cc/queue' : '/cc/orders')}
           className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
         >
           <ArrowLeft className="w-5 h-5" />
@@ -686,10 +709,25 @@ export default function CcOrderDetailPage() {
               ? <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
               : <Save className="w-4 h-4" />
             }
-            Зберегти
+            {fromQueue ? 'Зберегти і далі' : 'Зберегти'}
+            {fromQueue && !saving && <ArrowRight className="w-4 h-4" />}
           </button>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function CcOrderDetailPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex justify-center py-20">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
+        </div>
+      }
+    >
+      <CcOrderDetailContent />
+    </Suspense>
   );
 }

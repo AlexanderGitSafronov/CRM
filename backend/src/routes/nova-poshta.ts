@@ -6,6 +6,7 @@ import { createTtn, npPost, NpSenderConfig } from '../services/novaPoshta';
 import { sendSmsToCustomer, getTurboSmsConfig } from '../services/turbosms';
 import { sendOrderStatusByIdToAdtrack } from '../services/adtrackWebhook';
 import { logActivity } from '../services/notifications';
+import { applyStatusTimestamps } from '../services/orderGuards';
 import { runTrackingCycle, trackerState } from '../workers/npTracker';
 import { runSlaCheck, slaTrackerState } from '../workers/slaTracker';
 
@@ -190,9 +191,17 @@ router.post('/create-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthRequ
       payerType: payerType ?? 'Recipient',
     });
 
+    // NP InternetDocument.save returns CostOnSite (delivery price) → result.cost
+    const shippingCost = Number.isFinite(result.cost) ? Number(result.cost) : null;
+
     await prisma.order.update({
       where: { id: orderId },
-      data: { trackingNumber: result.ttn, status: 'SHIPPED' },
+      data: {
+        trackingNumber: result.ttn,
+        status: 'SHIPPED',
+        ...(shippingCost !== null ? { shippingCost } : {}),
+        ...applyStatusTimestamps('SHIPPED', order),
+      },
     });
 
     await prisma.orderHistory.create({
@@ -237,13 +246,49 @@ router.post('/create-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthRequ
 
 router.post('/bulk-create-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
-  const { orderIds, weight = 1, description = 'Товар', payerType = 'Recipient' } = req.body as {
-    orderIds: string[]; weight: number; description: string; payerType: 'Recipient' | 'Sender';
+  const body = req.body as {
+    items?: Array<{ orderId: string; weight?: number; description?: string }>;
+    orderIds?: string[];
+    weight?: number;
+    description?: string;
+    payerType?: 'Recipient' | 'Sender';
   };
+  const payerType = body.payerType ?? 'Recipient';
+  const sharedWeight = body.weight ?? 1;
+  const sharedDescription = body.description ?? 'Товар';
 
-  if (!Array.isArray(orderIds) || !orderIds.length) {
-    return res.status(400).json({ error: 'orderIds array required' });
+  // New contract: items[]. Back-compat: synthesize from orderIds + shared weight/description.
+  let items: Array<{ orderId: string; weight?: number; description?: string }>;
+  if (Array.isArray(body.items) && body.items.length) {
+    items = body.items;
+  } else if (Array.isArray(body.orderIds) && body.orderIds.length) {
+    items = body.orderIds.map((orderId) => ({
+      orderId,
+      weight: sharedWeight,
+      description: sharedDescription,
+    }));
+  } else {
+    return res.status(400).json({ error: 'items array required' });
   }
+
+  // Normalize + validate each item (weight 0.1..1000, finite).
+  const normalized: Array<{ orderId: string; weight: number; description: string }> = [];
+  for (const it of items) {
+    if (!it || typeof it.orderId !== 'string' || !it.orderId) {
+      return res.status(400).json({ error: 'Кожен елемент потребує orderId' });
+    }
+    const w = it.weight === undefined ? 1 : Number(it.weight);
+    if (!Number.isFinite(w) || w < 0.1 || w > 1000) {
+      return res.status(400).json({ error: `Невалідна вага для замовлення ${it.orderId} (0.1..1000)` });
+    }
+    normalized.push({
+      orderId: it.orderId,
+      weight: w,
+      description: (it.description ?? '').trim() || 'Товар',
+    });
+  }
+  const orderIds = normalized.map((n) => n.orderId);
+  const itemByOrderId = new Map(normalized.map((n) => [n.orderId, n]));
 
   const integration = await prisma.integration.findUnique({
     where: { organizationId_type: { organizationId: orgId, type: 'NOVA_POSHTA_SENDER' } },
@@ -272,20 +317,29 @@ router.post('/bulk-create-ttn', requireRole('ADMIN', 'MANAGER'), async (req: Aut
       results.push({ orderId: order.id, orderNum: order.orderNum, error: 'Немає реф НП' });
       continue;
     }
+    const item = itemByOrderId.get(order.id);
     try {
       const result = await createTtn({
         senderConfig,
         recipientName: order.recipientName || order.customer.name,
         recipientPhone: order.customer.phone,
         npCityRef: order.npCityRef, npWarehouseRef: order.npWarehouseRef,
-        weight: Number(weight), cost: order.total, codAmount: order.total,
-        description: description || 'Товар', seats: 1,
-        payerType: payerType ?? 'Recipient',
+        weight: item?.weight ?? 1, cost: order.total, codAmount: order.total,
+        description: item?.description || 'Товар', seats: 1,
+        payerType,
       });
+
+      // NP InternetDocument.save returns CostOnSite (delivery price) → result.cost
+      const shippingCost = Number.isFinite(result.cost) ? Number(result.cost) : null;
 
       await prisma.order.update({
         where: { id: order.id },
-        data: { trackingNumber: result.ttn, status: 'SHIPPED' },
+        data: {
+          trackingNumber: result.ttn,
+          status: 'SHIPPED',
+          ...(shippingCost !== null ? { shippingCost } : {}),
+          ...applyStatusTimestamps('SHIPPED', order),
+        },
       });
       await prisma.orderHistory.create({
         data: { orderId: order.id, action: 'TTN_CREATED', newValue: result.ttn, userId: req.user?.id },
@@ -364,22 +418,32 @@ router.post('/sla/run', requireRole('ADMIN'), async (_req: AuthRequest, res: Res
   return res.json({ message: 'SLA перевірку запущено вручну' });
 });
 
-// GET /api/nova-poshta/print-ttn?orderId=xxx&format=pdf|html&size=100x100|A4
-// Streams the printable TTN through the backend so the NP apiKey never
+// GET /api/nova-poshta/print-ttn?orderId=xxx (single, legacy)
+// GET /api/nova-poshta/print-ttn?orderIds=a,b,c (combined, multiple)
+// &format=pdf|html&size=100x100|A4
+// Streams the printable TTN(s) through the backend so the NP apiKey never
 // leaks to the browser (URL referer, history, sharing).
 router.get('/print-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
-  const { orderId } = req.query as { orderId?: string };
+  const { orderId, orderIds } = req.query as { orderId?: string; orderIds?: string };
   const format = (req.query.format as string) === 'html' ? 'html' : 'pdf';
   const size = (req.query.size as string) === 'A4' ? 'A4' : '100x100';
-  if (!orderId) return res.status(400).json({ error: 'orderId required' });
 
-  const order = await prisma.order.findFirst({
-    where: { id: orderId, organizationId: orgId },
+  // Accept either ?orderIds=a,b,c (new) or ?orderId=single (legacy).
+  const ids = (orderIds ? orderIds.split(',') : orderId ? [orderId] : [])
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!ids.length) return res.status(400).json({ error: 'orderId або orderIds required' });
+
+  const orders = await prisma.order.findMany({
+    where: { id: { in: ids }, organizationId: orgId },
     select: { trackingNumber: true, orderNum: true },
   });
-  if (!order) return res.status(404).json({ error: 'Замовлення не знайдено' });
-  if (!order.trackingNumber) return res.status(400).json({ error: 'У замовлення немає ТТН' });
+
+  // Collect TTNs; skip orders without one. Dedup in case of repeats.
+  const foundTtns = orders.filter((o) => o.trackingNumber).map((o) => o.trackingNumber as string);
+  const ttns = Array.from(new Set(foundTtns));
+  if (!ttns.length) return res.status(400).json({ error: 'Немає жодного ТТН для друку' });
 
   // Per-org NP API key
   const integration = await prisma.integration.findUnique({
@@ -391,16 +455,21 @@ router.get('/print-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthReques
   if (!apiKey) return res.status(400).json({ error: 'NP API key не задано' });
 
   const sizePath = size === 'A4' ? '' : '/100x100';
-  const upstream = `https://my.novaposhta.ua/orders/printDocument/orders[]/${order.trackingNumber}/type/${format}/apiKey/${apiKey}${sizePath}`;
+  // NP supports multiple TTNs joined by comma in the orders[] segment.
+  const ttnPath = ttns.join(',');
+  const upstream = `https://my.novaposhta.ua/orders/printDocument/orders[]/${ttnPath}/type/${format}/apiKey/${apiKey}${sizePath}`;
 
   try {
     const r = await fetch(upstream);
     if (!r.ok) {
-      logger.warn(`NP printDocument returned ${r.status} for TTN ${order.trackingNumber}`);
+      logger.warn(`NP printDocument returned ${r.status} for TTNs ${ttnPath}`);
       return res.status(502).json({ error: `Нова Пошта повернула статус ${r.status}` });
     }
     const contentType = r.headers.get('content-type') || (format === 'pdf' ? 'application/pdf' : 'text/html');
-    const filename = `TTN-${order.trackingNumber}-${size}.${format === 'pdf' ? 'pdf' : 'html'}`;
+    const ext = format === 'pdf' ? 'pdf' : 'html';
+    const filename = ttns.length === 1
+      ? `TTN-${ttns[0]}-${size}.${ext}`
+      : `TTN-${ttns.length}шт-${size}.${ext}`;
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     const buf = Buffer.from(await r.arrayBuffer());
