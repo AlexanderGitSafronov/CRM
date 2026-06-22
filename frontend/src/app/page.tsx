@@ -321,7 +321,7 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-white font-sans text-[#0b1220] antialiased">
       {/* ============================================================ NAV */}
-      <header className="sticky top-0 z-50 border-b border-[#1e274b] bg-[#05060f]/85 backdrop-blur-xl">
+      <header className="sticky top-0 z-50 border-b border-[#1e274b] bg-[#05060f]">
         <nav className="mx-auto flex max-w-[1200px] items-center justify-between gap-6 px-6 py-4">
           <a href="#top" className="flex items-center gap-2.5">
             <span className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-gradient-to-br from-[#2563eb] to-[#06b6d4] shadow-lg shadow-primary-600/30">
