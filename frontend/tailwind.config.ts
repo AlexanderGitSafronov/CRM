@@ -22,9 +22,13 @@ const config: Config = {
           800: '#1e40af',
           900: '#1e3a8a',
         },
+        accent: '#06b6d4',
+        ink: '#0b1220',
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
+        display: ['Geist', 'Inter', 'system-ui', 'sans-serif'],
+        mono: ['"Geist Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
     },
   },
