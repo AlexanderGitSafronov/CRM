@@ -2,10 +2,11 @@ import { Response } from 'express';
 import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { logActivity } from '../services/notifications';
+import { parsePagination } from '../utils/pagination';
 
 export const getCustomers = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
-  const { search, page = '1', limit = '20' } = req.query as Record<string, string>;
+  const { search } = req.query as Record<string, string>;
 
   const where: Record<string, unknown> = { organizationId: orgId };
   if (search) {
@@ -16,32 +17,49 @@ export const getCustomers = async (req: AuthRequest, res: Response) => {
     ];
   }
 
-  const pageNum = Math.max(1, parseInt(page));
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+  const { page: pageNum, limit: limitNum, skip } = parsePagination(req.query.page, req.query.limit);
 
   const [customers, total] = await Promise.all([
     prisma.customer.findMany({
       where,
-      include: {
-        _count: { select: { orders: true } },
-        orders: {
-          select: { total: true, status: true },
-          orderBy: { createdAt: 'desc' },
-        },
-      },
+      include: { _count: { select: { orders: true } } },
       orderBy: { createdAt: 'desc' },
-      skip: (pageNum - 1) * limitNum,
+      skip,
       take: limitNum,
     }),
     prisma.customer.count({ where }),
   ]);
 
+  // LTV/lastOrder считаем ограниченными запросами по id текущей страницы,
+  // а не подгружая ВСЕ заказы каждого клиента (было unbounded include).
+  // LTV — только реализованные деньги (DELIVERED), чтобы совпадало с аналитикой.
+  const ids = customers.map((c) => c.id);
+  const [ltvRows, lastRows] = await Promise.all([
+    ids.length
+      ? prisma.order.groupBy({
+          by: ['customerId'],
+          where: { organizationId: orgId, customerId: { in: ids }, status: 'DELIVERED' },
+          _sum: { total: true },
+        })
+      : Promise.resolve([] as Array<{ customerId: string; _sum: { total: number | null } }>),
+    ids.length
+      ? prisma.order.findMany({
+          where: { organizationId: orgId, customerId: { in: ids } },
+          distinct: ['customerId'],
+          orderBy: { createdAt: 'desc' },
+          select: { customerId: true, total: true, status: true },
+        })
+      : Promise.resolve([] as Array<{ customerId: string; total: number; status: string }>),
+  ]);
+
+  const ltvByCustomer = new Map(ltvRows.map((r) => [r.customerId, r._sum.total ?? 0]));
+  const lastByCustomer = new Map(lastRows.map((r) => [r.customerId, { total: r.total, status: r.status }]));
+
   const customersWithLTV = customers.map((c) => ({
     ...c,
-    ltv: c.orders.reduce((sum, o) => sum + o.total, 0),
+    ltv: ltvByCustomer.get(c.id) ?? 0,
     ordersCount: c._count.orders,
-    lastOrder: c.orders[0] || null,
-    orders: undefined,
+    lastOrder: lastByCustomer.get(c.id) ?? null,
     _count: undefined,
   }));
 
@@ -77,7 +95,10 @@ export const getCustomer = async (req: AuthRequest, res: Response) => {
     return res.status(404).json({ error: 'Клиент не найден' });
   }
 
-  const ltv = customer.orders.reduce((sum, o) => sum + o.total, 0);
+  // LTV — реализованные деньги (только DELIVERED), как в списке и аналитике.
+  const ltv = customer.orders
+    .filter((o) => o.status === 'DELIVERED')
+    .reduce((sum, o) => sum + o.total, 0);
 
   return res.json({ ...customer, ltv });
 };

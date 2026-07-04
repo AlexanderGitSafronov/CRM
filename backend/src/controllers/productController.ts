@@ -2,10 +2,19 @@ import { Response } from 'express';
 import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { logActivity } from '../services/notifications';
+import { parsePagination } from '../utils/pagination';
+
+// Безопасный разбор числа из тела запроса: нечисло/NaN → null (не пишем в Prisma).
+const numOrNull = (v: unknown): number | null => {
+  if (v === undefined || v === null || v === '') return null;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v.trim() || null : null);
 
 // Image input validator — accepts data:image/* (raster only) or https:// URL.
 // Rejects javascript:, file:, data:text/html, and SVG (script-bearing).
-function validateImage(input: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
+export function validateImage(input: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
   if (input === undefined) return { ok: true, value: undefined as unknown as null };
   if (input === null || input === '') return { ok: true, value: null };
   if (typeof input !== 'string') return { ok: false, error: 'image must be a string' };
@@ -18,7 +27,10 @@ function validateImage(input: unknown): { ok: true; value: string | null } | { o
 
 export const getProducts = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
-  const { search, active, page = '1', limit = '50' } = req.query as Record<string, string>;
+  const { search, active } = req.query as Record<string, string>;
+  // lite=true — без тяжёлого base64-поля image (для формы заказа/поиска, где картинка не нужна):
+  // раньше OrderForm тянул до 200 товаров с картинками (~10-20MB) при каждом открытии.
+  const lite = req.query.lite === 'true';
 
   const where: Record<string, unknown> = { organizationId: orgId };
   if (search) {
@@ -31,21 +43,28 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
     where.active = active === 'true';
   }
 
-  const pageNum = Math.max(1, parseInt(page));
-  const limitNum = Math.min(200, Math.max(1, parseInt(limit)));
+  const { page: pageNum, limit: limitNum, skip } = parsePagination(req.query.page, req.query.limit, { defLimit: 50, maxLimit: 200 });
 
-  const [products, total] = await Promise.all([
-    prisma.product.findMany({
-      where,
-      orderBy: { name: 'asc' },
-      skip: (pageNum - 1) * limitNum,
-      take: limitNum,
-      include: {
-        _count: { select: { orderItems: true } },
-      },
-    }),
-    prisma.product.count({ where }),
-  ]);
+  const products = lite
+    ? await prisma.product.findMany({
+        where,
+        orderBy: { name: 'asc' },
+        skip,
+        take: limitNum,
+        select: {
+          id: true, name: true, sku: true, salePrice: true, purchasePrice: true,
+          stock: true, active: true, lowStockThreshold: true,
+          _count: { select: { orderItems: true } },
+        },
+      })
+    : await prisma.product.findMany({
+        where,
+        orderBy: { name: 'asc' },
+        skip,
+        take: limitNum,
+        include: { _count: { select: { orderItems: true } } },
+      });
+  const total = await prisma.product.count({ where });
 
   return res.json({
     products: products.map((p) => ({
@@ -87,7 +106,7 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const { name, sku, description, purchasePrice, salePrice, stock, image } = req.body;
 
-  if (!name?.trim()) {
+  if (typeof name !== 'string' || !name.trim()) {
     return res.status(400).json({ error: 'Product name required' });
   }
 
@@ -145,16 +164,23 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
     imagePatch = { image: imgCheck.value };
   }
 
+  // Числовые поля: нечисло/NaN игнорируем (не пишем в Prisma), иначе float NaN → 500.
+  // Строковые: .trim() только для строк.
+  const purchase = numOrNull(purchasePrice);
+  const sale = numOrNull(salePrice);
+  const stockNum = numOrNull(stock);
+  const lowStock = numOrNull(lowStockThreshold);
+
   const product = await prisma.product.update({
     where: { id },
     data: {
-      ...(name !== undefined && { name: name.trim() }),
-      ...(sku !== undefined && { sku: sku?.trim() || null }),
-      ...(description !== undefined && { description: description?.trim() || null }),
-      ...(purchasePrice !== undefined && { purchasePrice: parseFloat(purchasePrice) }),
-      ...(salePrice !== undefined && { salePrice: parseFloat(salePrice) }),
-      ...(stock !== undefined && { stock: parseInt(stock), lowStockNotifiedAt: null }),
-      ...(lowStockThreshold !== undefined && { lowStockThreshold: Math.max(0, parseInt(lowStockThreshold)) }),
+      ...(typeof name === 'string' && name.trim() && { name: name.trim() }),
+      ...(sku !== undefined && { sku: strOrNull(sku) }),
+      ...(description !== undefined && { description: strOrNull(description) }),
+      ...(purchase !== null && { purchasePrice: purchase }),
+      ...(sale !== null && { salePrice: sale }),
+      ...(stockNum !== null && { stock: Math.trunc(stockNum), lowStockNotifiedAt: null }),
+      ...(lowStock !== null && { lowStockThreshold: Math.max(0, Math.trunc(lowStock)) }),
       ...imagePatch,
       ...(active !== undefined && { active: Boolean(active) }),
     },
@@ -208,17 +234,21 @@ export const updateStock = async (req: AuthRequest, res: Response) => {
   if (!existing) return res.status(404).json({ error: 'Товар не найден' });
 
   if (stock !== undefined) {
+    const n = numOrNull(stock);
+    if (n === null) return res.status(400).json({ error: 'Invalid stock' });
     const product = await prisma.product.update({
       where: { id },
-      data: { stock: parseInt(stock) },
+      data: { stock: Math.trunc(n) },
     });
     return res.json(product);
   }
 
   if (delta !== undefined) {
+    const n = numOrNull(delta);
+    if (n === null) return res.status(400).json({ error: 'Invalid delta' });
     const product = await prisma.product.update({
       where: { id },
-      data: { stock: { increment: parseInt(delta) } },
+      data: { stock: { increment: Math.trunc(n) } },
     });
     return res.json(product);
   }

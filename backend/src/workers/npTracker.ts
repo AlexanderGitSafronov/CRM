@@ -3,7 +3,7 @@ import prisma from '../services/prisma';
 import { getTrackingStatuses } from '../services/novaPoshta';
 import { applyStatusTimestamps } from '../services/orderGuards';
 import { createNotification, logActivity } from '../services/notifications';
-import { sendTelegramMessage } from '../services/telegram';
+import { sendTelegramMessage, escapeHtml } from '../services/telegram';
 import { sendIncomeToRashod, reverseIncomeToRashod } from '../services/rashodWebhook';
 import { sendOrderStatusByIdToAdtrack } from '../services/adtrackWebhook';
 import { sendSmsToCustomer, getTurboSmsConfig } from '../services/turbosms';
@@ -53,9 +53,14 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
       const integration = await prisma.integration.findUnique({
         where: { organizationId_type: { organizationId, type: 'NOVA_POSHTA_SENDER' } },
       });
+      // Глобальный env-ключ — только выделенному орг (NP_GLOBAL_KEY_ORG_ID), не всем тенантам.
+      const globalKey =
+        process.env.NP_GLOBAL_KEY_ORG_ID && organizationId === process.env.NP_GLOBAL_KEY_ORG_ID
+          ? process.env.NP_API_KEY || ''
+          : '';
       const apiKey = integration
-        ? (JSON.parse(integration.config) as { apiKey?: string }).apiKey || process.env.NP_API_KEY || ''
-        : process.env.NP_API_KEY || '';
+        ? (JSON.parse(integration.config) as { apiKey?: string }).apiKey || globalKey
+        : globalKey;
 
       if (!apiKey) {
         logger.warn(`NP Tracker: no API key for org ${organizationId}, skipping`);
@@ -165,7 +170,7 @@ export async function runTrackingCycle(): Promise<{ checked: number; updated: nu
                   await sendTelegramMessage({
                     botToken: cfg.botToken,
                     chatId: cfg.chatId,
-                    message: `${emoji} <b>Замовлення #${order.orderNum}</b>\n${order.customer.name}\nТТН: <code>${status.ttn}</code>\nСтатус: ${statusLabel}`,
+                    message: `${emoji} <b>Замовлення #${order.orderNum}</b>\n${escapeHtml(order.customer.name)}\nТТН: <code>${escapeHtml(status.ttn)}</code>\nСтатус: ${statusLabel}`,
                   });
                 }
               }

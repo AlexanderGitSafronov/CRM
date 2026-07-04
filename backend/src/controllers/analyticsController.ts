@@ -2,14 +2,33 @@ import { Response } from 'express';
 import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { logActivity } from '../services/notifications';
+import { parsePagination } from '../utils/pagination';
 
+// Vercel/Neon run in UTC, но арендаторы работают в бизнес-часовом поясе (Украина,
+// стандартно UTC+2). Границы «дня»/«сегодня» считаем в этом поясе, иначе окна
+// периодов и «сегодня» съезжают на 2–3 часа. DST (EET/EEST) не учитывается —
+// смещение конфигурируется через BUSINESS_TZ_OFFSET_MINUTES.
+const TZ_OFFSET_MIN = Number(process.env.BUSINESS_TZ_OFFSET_MINUTES || 120);
+
+// Начало «сегодня» в бизнес-поясе, как UTC-Date.
+const businessTodayStart = (now = new Date()): Date => {
+  const shifted = new Date(now.getTime() + TZ_OFFSET_MIN * 60000);
+  return new Date(
+    Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - TZ_OFFSET_MIN * 60000,
+  );
+};
+
+// dateFrom/dateTo — календарные дни YYYY-MM-DD в бизнес-поясе; переводим в UTC-границы.
+// NaN-значения (кривой ввод) игнорируем, чтобы не отдавать Prisma невалидную дату.
 const dateRange = (dateFrom?: string, dateTo?: string) => {
   const f: Record<string, Date> = {};
-  if (dateFrom) f.gte = new Date(dateFrom);
+  if (dateFrom) {
+    const t = new Date(dateFrom).getTime();
+    if (Number.isFinite(t)) f.gte = new Date(t - TZ_OFFSET_MIN * 60000);
+  }
   if (dateTo) {
-    const end = new Date(dateTo);
-    end.setHours(23, 59, 59, 999);
-    f.lte = end;
+    const t = new Date(dateTo).getTime();
+    if (Number.isFinite(t)) f.lte = new Date(t + 86400000 - TZ_OFFSET_MIN * 60000 - 1);
   }
   return f;
 };
@@ -236,7 +255,15 @@ export const getRevenueByProduct = async (req: AuthRequest, res: Response) => {
 
   returnedItems.forEach((item) => {
     const key = item.productId || item.name;
-    if (byProduct[key]) byProduct[key].returned += item.quantity;
+    // Товар, у которого в периоде были ТОЛЬКО возвраты (ни одной доставки),
+    // тоже должен попасть в отчёт — иначе его убыток и вердикт 'disable' невидимы.
+    if (!byProduct[key]) {
+      byProduct[key] = {
+        name: item.name, revenue: 0, quantity: 0, cost: 0, profit: 0, returned: 0,
+        redemptionRate: 100, marginPerUnit: 0, trendPct: null, verdict: 'optimize',
+      };
+    }
+    byProduct[key].returned += item.quantity;
   });
 
   // Prior-period revenue per product (delivered side only), used for trendPct.
@@ -417,14 +444,13 @@ export const getExpenses = async (req: AuthRequest, res: Response) => {
     where.date = f;
   }
 
-  const pageNum = Math.max(1, parseInt(page));
-  const limitNum = Math.min(100, parseInt(limit));
+  const { page: pageNum, limit: limitNum, skip } = parsePagination(page, limit);
 
   const [expenses, total, totalAmount] = await Promise.all([
     prisma.expense.findMany({
       where,
       orderBy: { date: 'desc' },
-      skip: (pageNum - 1) * limitNum,
+      skip,
       take: limitNum,
     }),
     prisma.expense.count({ where }),
@@ -660,7 +686,7 @@ export const getCcStats = async (req: AuthRequest, res: Response) => {
   };
 
   const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayStart = businessTodayStart(now);
 
   const [
     todayOrders, todayCalled, todayConfirmed, todayCancelled, todayNoAnswer,
@@ -741,6 +767,12 @@ export const getCcPayroll = async (req: AuthRequest, res: Response) => {
   const CONFIRM_RATE = 10;
   const UPSELL_RATE = 0.20;
 
+  // Начисления считаются по заказам в выбранном окне (createdAt), поэтому и выплаты
+  // окном ограничиваем тем же периодом — иначе balance = период_начислено − all-time_выплачено,
+  // что даёт бессмысленный отрицательный остаток при просмотре одного месяца.
+  const paymentWhereBase: Record<string, unknown> = { organizationId: orgId };
+  if (Object.keys(dateFilter).length) paymentWhereBase.createdAt = dateFilter;
+
   const operators = await prisma.user.findMany({
     where: { organizationId: orgId, role: { in: ['CALL_CENTER', 'ADMIN'] }, active: true },
     select: { id: true, name: true },
@@ -766,13 +798,13 @@ export const getCcPayroll = async (req: AuthRequest, res: Response) => {
       const totalEarned = confirmedBonus + upsellBonus;
 
       const paymentsResult = await prisma.ccPayment.aggregate({
-        where: { organizationId: orgId, operatorId: op.id },
+        where: { ...paymentWhereBase, operatorId: op.id },
         _sum: { amount: true },
       });
       const totalPaid = paymentsResult._sum.amount ?? 0;
 
       const payments = await prisma.ccPayment.findMany({
-        where: { organizationId: orgId, operatorId: op.id },
+        where: { ...paymentWhereBase, operatorId: op.id },
         orderBy: { createdAt: 'desc' },
         take: 10,
         select: { id: true, amount: true, note: true, createdAt: true },
@@ -886,7 +918,7 @@ export const getCustomersByCity = async (req: AuthRequest, res: Response) => {
 export const getKpi = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayStart = businessTodayStart(now);
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 

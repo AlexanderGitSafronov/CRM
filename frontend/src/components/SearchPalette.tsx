@@ -47,6 +47,8 @@ export default function SearchPalette() {
   const [loading, setLoading] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Порядковый номер запроса поиска: устаревший ответ не должен перетереть свежий.
+  const searchSeq = useRef(0);
 
   // Open with Cmd+K / Ctrl+K
   useEffect(() => {
@@ -79,14 +81,17 @@ export default function SearchPalette() {
     }
     setLoading(true);
     const t = setTimeout(async () => {
+      const myReq = ++searchSeq.current;
       try {
         const res = await api.get('/search', { params: { q: query } });
+        if (myReq !== searchSeq.current) return; // устаревший ответ
         setResults(res.data);
         setActiveIndex(0);
       } catch {
+        if (myReq !== searchSeq.current) return;
         setResults({ orders: [], customers: [], products: [] });
       } finally {
-        setLoading(false);
+        if (myReq === searchSeq.current) setLoading(false);
       }
     }, 200);
     return () => clearTimeout(t);

@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+// .trim() защищает от известного лишнего перевода строки в prod-env NEXT_PUBLIC_API_URL.
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').trim().replace(/\/+$/, '');
 
 export const api = axios.create({
   baseURL: `${API_URL}/api`,

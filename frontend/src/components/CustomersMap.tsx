@@ -1,5 +1,8 @@
 'use client';
 
+// Бандлим CSS leaflet локально вместо загрузки с unpkg в рантайме
+// (иначе карта без стилей, если CDN недоступен/медленный).
+import 'leaflet/dist/leaflet.css';
 import { useEffect, useRef, useState } from 'react';
 import api from '@/lib/api';
 import { resolveCity } from '@/lib/uaCities';
@@ -31,14 +34,7 @@ export default function CustomersMap() {
       const L = (await import('leaflet')).default;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const Lany: any = L;
-      // Inject CSS via CDN since leaflet's CSS isn't auto-bundled
-      if (!document.querySelector('link[data-leaflet-css]')) {
-        const link = document.createElement('link');
-        link.rel = 'stylesheet';
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-        link.setAttribute('data-leaflet-css', '1');
-        document.head.appendChild(link);
-      }
+      // CSS leaflet теперь импортируется статически сверху (без unpkg).
       // Style for the permanent order-count label sitting on each bubble
       if (!document.querySelector('style[data-om-label]')) {
         const style = document.createElement('style');
@@ -135,7 +131,9 @@ export default function CustomersMap() {
         </div>
         <span className="text-xs text-gray-400">{data.length} міст</span>
       </div>
-      <div className="relative">
+      {/* isolate + z-0 создают отдельный stacking-контекст: внутренние z-index leaflet
+          (панели/контролы 400-1000) больше не перекрывают сайдбар и палитру поиска. */}
+      <div className="relative isolate z-0">
         <div ref={containerRef} className="w-full h-80 bg-gray-50 dark:bg-gray-800/40" />
         <div className="pointer-events-none absolute bottom-2 right-2 z-[500] flex items-center gap-1.5 rounded-lg bg-white/85 dark:bg-gray-900/80 px-2.5 py-1.5 text-[10px] text-gray-500 dark:text-gray-300 shadow-sm backdrop-blur">
           <span>менше</span>

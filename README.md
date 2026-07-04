@@ -90,14 +90,14 @@ npm run dev
 
 ---
 
-## Тестовые аккаунты
+## Первый вход
 
-| Роль | Email | Пароль |
-|------|-------|--------|
-| Администратор | admin@crm.com | admin123 |
-| Менеджер | manager1@crm.com | manager123 |
-| Менеджер | manager2@crm.com | manager123 |
-| Просмотр | viewer@crm.com | viewer123 |
+Дефолтных учёток нет — каждый запуск создаёт изолированный workspace:
+
+- **Регистрация**: откройте `/register` и создайте организацию + администратора.
+- **Bootstrap-администратор** (для дефолтного workspace): задайте env `BOOTSTRAP_ADMIN_EMAIL` и `BOOTSTRAP_ADMIN_PASSWORD` — админ создаётся только если его ещё нет.
+
+Пароль должен быть ≥8 символов и содержать буквы и цифры.
 
 ---
 
@@ -109,7 +109,7 @@ npm run dev
 POST http://localhost:3001/api/webhook/order
 Headers:
   Content-Type: application/json
-  X-Webhook-Token: demo-webhook-token-change-in-production
+  X-Webhook-Token: <ваш-токен-из-Налаштування→Webhook>
 
 Body:
 {
@@ -163,16 +163,24 @@ CRM/
 
 ### Backend (.env)
 ```env
-DATABASE_URL="file:./dev.db"
-JWT_SECRET="your-secret-key"
+# PostgreSQL (Prisma schema — provider postgresql). SQLite (file:...) больше не поддерживается.
+DATABASE_URL="postgresql://user:password@localhost:5432/crm?schema=public"
+JWT_SECRET="минимум-32-символа-в-проде"
 JWT_EXPIRES_IN="7d"
 PORT=3001
 CORS_ORIGIN="http://localhost:3000"
-TELEGRAM_BOT_TOKEN=""
-TELEGRAM_CHAT_ID=""
+# Бизнес-часовой пояс для границ аналитики (мин от UTC; Украина = 120)
+BUSINESS_TZ_OFFSET_MINUTES=120
+# Только этому org отдаётся глобальный NP_API_KEY как fallback (id дефолтного workspace)
+NP_GLOBAL_KEY_ORG_ID=""
+NP_API_KEY=""
+# Секрет для GitHub Actions cron → /api/cron/*
+CRON_SECRET=""
 ```
 
 ### Frontend (.env.local)
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:3001
+# Публичный URL сайта — для canonical/OG/robots/sitemap
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```

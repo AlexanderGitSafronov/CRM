@@ -34,6 +34,7 @@ export default function CsvImport({ open, onClose, endpoint, onSuccess }: Props)
   const [filename, setFilename] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const isCustomers = endpoint === '/import/customers';
@@ -107,7 +108,18 @@ export default function CsvImport({ open, onClose, endpoint, onSuccess }: Props)
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
-            className="w-full border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-xl py-12 flex flex-col items-center gap-2 hover:border-primary-400 transition-colors"
+            onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+            onDragLeave={(e) => { e.preventDefault(); setDragActive(false); }}
+            onDrop={(e) => {
+              // Без preventDefault браузер открыл бы файл вместо импорта.
+              e.preventDefault();
+              setDragActive(false);
+              const f = e.dataTransfer.files?.[0];
+              if (f) handleFile(f);
+            }}
+            className={`w-full border-2 border-dashed rounded-xl py-12 flex flex-col items-center gap-2 transition-colors ${
+              dragActive ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-gray-300 dark:border-gray-700 hover:border-primary-400'
+            }`}
           >
             <Upload className="w-8 h-8 text-gray-400" />
             <p className="font-medium text-gray-700 dark:text-gray-300">Виберіть CSV файл</p>

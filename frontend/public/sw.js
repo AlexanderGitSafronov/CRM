@@ -10,6 +10,6 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-self.addEventListener('fetch', () => {
-  // Pass-through: no caching strategy.
-});
+// Намеренно НЕТ обработчика 'fetch': пустой pass-through лишь добавлял диспетч
+// service worker к каждому запросу без пользы. Современный Chrome (89+) считает
+// приложение устанавливаемым и без fetch-обработчика (достаточно manifest + SW).

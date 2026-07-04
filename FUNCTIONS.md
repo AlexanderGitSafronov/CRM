@@ -1,8 +1,13 @@
 # CRM — Описание функций и API
 
+> ⚠️ Документ описывает базовое ядро API и мог отстать от кода (аналитика, cron,
+> Нова Пошта, интеграции, публичное трекинг-API добавлены позже). Источник истины —
+> роуты в `backend/src/routes/`. Стек — PostgreSQL (не SQLite), мультитенантность
+> по `organizationId`.
+
 ## Стек
 - **Backend**: Node.js + Express 4 + TypeScript, порт 3001
-- **БД**: SQLite via Prisma ORM
+- **БД**: PostgreSQL via Prisma ORM (multi-tenant, scoped by organizationId)
 - **Auth**: JWT (Bearer токен)
 - **Роли**: ADMIN, MANAGER, CALL_CENTER, VIEWER
 

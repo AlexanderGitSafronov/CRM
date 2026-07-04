@@ -17,7 +17,7 @@ const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN || '7d') as jwt.SignOptions['
 
 const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const passwordIssue = (pw: string): string | null => {
+export const passwordIssue = (pw: string): string | null => {
   if (typeof pw !== 'string') return 'Password required';
   if (pw.length < 8) return 'Пароль має містити мінімум 8 символів';
   if (!/[a-zA-Z]/.test(pw) || !/\d/.test(pw)) return 'Пароль має містити літери та цифри';

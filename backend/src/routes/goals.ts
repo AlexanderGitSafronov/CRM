@@ -34,8 +34,8 @@ async function computeProgress(orgId: string, goal: { startDate: Date; endDate: 
   };
 }
 
-// GET /api/goals — list with progress
-router.get('/', async (req: AuthRequest, res: Response) => {
+// GET /api/goals — list with progress (раскрывает выручку/цели — только ADMIN/MANAGER)
+router.get('/', requireRole('ADMIN', 'MANAGER'), async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const { active } = req.query as Record<string, string>;
   const where: Record<string, unknown> = { organizationId: orgId };

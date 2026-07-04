@@ -169,8 +169,19 @@ export default function NovaPoshtaSelect({ cityValue, addressValue, onCityChange
             type="text"
             value={cityQuery}
             onChange={(e) => {
-              setCityQuery(e.target.value);
-              if (selectedCity) setSelectedCity(null);
+              const v = e.target.value;
+              setCityQuery(v);
+              // Пробрасываем набранный текст в родителя, иначе при сохранении заказ
+              // молча оставит прежний город. При отклонении от выбранного города
+              // сбрасываем устаревшие refs города/отделения — они относились к старому выбору.
+              onCityChange(v);
+              if (selectedCity) {
+                setSelectedCity(null);
+                onCityRefChange?.('');
+                onWarehouseRefChange?.('');
+                onAddressChange('');
+                setWarehouseQuery('');
+              }
             }}
             onFocus={() => {
               if (cities.length > 0) setShowCityDropdown(true);
@@ -219,8 +230,12 @@ export default function NovaPoshtaSelect({ cityValue, addressValue, onCityChange
               type="text"
               value={warehouseQuery}
               onChange={(e) => {
-                setWarehouseQuery(e.target.value);
+                const v = e.target.value;
+                setWarehouseQuery(v);
                 setShowWarehouseDropdown(true);
+                // Отклонились от выбранного отделения — прежний ref больше не валиден.
+                onWarehouseRefChange?.('');
+                onAddressChange(v);
               }}
               onFocus={() => setShowWarehouseDropdown(true)}
               placeholder="Відділення або Поштомат..."

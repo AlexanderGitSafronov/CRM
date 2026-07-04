@@ -7,6 +7,8 @@ import {
   DragOverlay,
   DragStartEvent,
   PointerSensor,
+  TouchSensor,
+  KeyboardSensor,
   useSensor,
   useSensors,
   useDroppable,
@@ -270,7 +272,12 @@ export default function KanbanBoard({ orders, onOrderUpdate }: KanbanBoardProps)
   }, [configOpen]);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    // На тач-устройствах: старт перетаскивания по долгому нажатию (250мс),
+    // чтобы обычная прокрутка списка не превращалась в drag.
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+    // Клавиатурная доступность: Space — взять карточку, стрелки — двигать.
+    useSensor(KeyboardSensor)
   );
 
   // Preserve column order, keep it stable, and drop any unknown stored values.

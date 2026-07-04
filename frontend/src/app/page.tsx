@@ -307,7 +307,10 @@ export default function HomePage() {
     return () => io.disconnect();
   }, [mounted]);
 
-  if (!mounted || (_hasHydrated && user)) {
+  // Спиннер показываем ТОЛЬКО когда реально редиректим залогиненного пользователя
+  // (после mount). На сервере mounted=false → рендерим полный маркетинговый контент,
+  // иначе единственная SEO-страница отдавала бы краулерам/скрейперам пустой спиннер.
+  if (mounted && _hasHydrated && user) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#05060f]">
         <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-500" />
@@ -382,10 +385,13 @@ export default function HomePage() {
                 Почати безкоштовно
                 <ArrowRight className="h-[18px] w-[18px] transition-transform group-hover:translate-x-1" />
               </button>
-              <button className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/[0.06] px-6 py-4 text-[16px] font-medium text-white backdrop-blur transition-colors hover:bg-white/10">
+              <a
+                href="#features"
+                className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/[0.06] px-6 py-4 text-[16px] font-medium text-white backdrop-blur transition-colors hover:bg-white/10"
+              >
                 <Play className="h-4 w-4" />
                 Подивитися демо
-              </button>
+              </a>
             </div>
             <div data-reveal style={delay(4)} className="mt-7 flex items-center gap-2.5 text-[14px] font-medium text-[#9aa6c7]">
               <ShieldCheck className="h-[18px] w-[18px] text-[#22d3ee]" />
@@ -724,12 +730,15 @@ export default function HomePage() {
                 <div key={f.q} data-reveal style={delay(Math.min(i, 4))} className="overflow-hidden rounded-2xl border border-[#e6ebf2] bg-white">
                   <button
                     onClick={() => setOpenFaq(open ? -1 : i)}
+                    aria-expanded={open}
+                    aria-controls={`faq-panel-${i}`}
                     className="flex w-full items-center justify-between gap-4 px-7 py-6 text-left"
                   >
                     <span className="font-display text-[17px] font-semibold text-[#0b1220]">{f.q}</span>
                     {open ? <Minus className="h-5 w-5 shrink-0 text-[#2563eb]" /> : <Plus className="h-5 w-5 shrink-0 text-[#2563eb]" />}
                   </button>
                   <div
+                    id={`faq-panel-${i}`}
                     className="grid transition-all duration-300 ease-out"
                     style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
                   >
@@ -761,9 +770,12 @@ export default function HomePage() {
               Створити акаунт безкоштовно
               <ArrowRight className="h-[18px] w-[18px] transition-transform group-hover:translate-x-1" />
             </button>
-            <button className="inline-flex items-center gap-2 rounded-full border border-white/35 bg-white/[0.1] px-6 py-4 text-[16px] font-medium text-white backdrop-blur transition-colors hover:bg-white/20">
+            <a
+              href="#features"
+              className="inline-flex items-center gap-2 rounded-full border border-white/35 bg-white/[0.1] px-6 py-4 text-[16px] font-medium text-white backdrop-blur transition-colors hover:bg-white/20"
+            >
               <Play className="h-4 w-4" /> Подивитися демо
-            </button>
+            </a>
           </div>
           <p data-reveal style={delay(4)} className="mt-6 text-[14px] font-medium text-[#c7d2fe]">
             Без кредитної картки &nbsp;·&nbsp; Налаштування за 5 хвилин &nbsp;·&nbsp; Скасування будь-коли
@@ -812,8 +824,8 @@ export default function HomePage() {
           <div className="flex flex-col items-center justify-between gap-4 sm:flex-row">
             <span className="text-[14px] text-[#7886a6]">© 2026 CRM Pro · Зроблено з турботою про український бізнес 🇺🇦</span>
             <div className="flex items-center gap-6">
-              <a href="#top" className="text-[14px] text-[#7886a6] transition-colors hover:text-white">Політика конфіденційності</a>
-              <a href="#top" className="text-[14px] text-[#7886a6] transition-colors hover:text-white">Умови використання</a>
+              <a href="/privacy" className="text-[14px] text-[#7886a6] transition-colors hover:text-white">Політика конфіденційності</a>
+              <a href="/terms" className="text-[14px] text-[#7886a6] transition-colors hover:text-white">Умови використання</a>
             </div>
           </div>
         </div>

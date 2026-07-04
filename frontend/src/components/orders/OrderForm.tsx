@@ -104,7 +104,9 @@ export default function OrderForm({ open, onClose, onSuccess, order }: OrderForm
   useEffect(() => {
     if (open) {
       Promise.all([
-        api.get('/products', { params: { active: true, limit: 200 } }),
+        // lite=true — без base64-картинок (форме они не нужны): раньше открытие формы
+        // тянуло до 200 товаров с картинками (~10-20MB) при каждом показе.
+        api.get('/products', { params: { active: true, limit: 200, lite: true } }),
         api.get('/users').catch(() => ({ data: [] })),
         api.get('/order-templates').catch(() => ({ data: [] })),
       ]).then(([p, u, t]) => {
@@ -221,6 +223,10 @@ export default function OrderForm({ open, onClose, onSuccess, order }: OrderForm
       onClose={onClose}
       title={order ? `Редактировать заказ #${order.orderNum}` : 'Новый заказ'}
       size="lg"
+      confirmClose={
+        // Спрашиваем подтверждение при закрытии, только если что-то введено.
+        Boolean(customer.name || customer.phone || comment || items.some((i) => i.name || i.price))
+      }
     >
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Customer section */}

@@ -256,6 +256,14 @@
     transition: none !important;
   }
 }
+/* Без JS (краулеры/скрейперы, отключённый JS) IntersectionObserver не добавит
+   .is-visible — не прячем контент, иначе SEO-страница выглядит пустой. */
+@media (scripting: none) {
+  [data-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
 
 .bg-brand-grad {
   background-image: linear-gradient(120deg, #2563eb 0%, #06b6d4 100%);

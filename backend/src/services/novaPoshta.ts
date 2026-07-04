@@ -24,14 +24,22 @@ export async function npPost<T = unknown>(
   return response.json() as Promise<NpResponse<T>>;
 }
 
-// NP StatusCode → CRM status mapping
-// 9 = Вручено → DELIVERED (реальний викуп / отримання COD)
-// 10 = Повернення ініційовано, 11 = Відмова отримувача → RETURNED
+// NP StatusCode → CRM status mapping.
+// Довідник статусів Nova Poshta (TrackingDocument/getStatusDocuments):
+//   9  = «Відправлення отримано»                                   → DELIVERED
+//   10 = «Відправлення отримано… очікуйте грошовий переказ» (COD)  → DELIVERED (успішний викуп)
+//   11 = «Відправлення отримано… грошовий переказ видано» (COD)    → DELIVERED (успішний викуп)
+//   102 = «Відмова від отримання (відправлення повертається)»      → RETURNED
+//   103 = «Відмова одержувача (відправлення повертається)»         → RETURNED
+//   105 = «Припинено зберігання (відправлення утилізовано/повернено)» → RETURNED
 // 7/8/14 = Прибув на склад/відділення — лише ARRIVED, НЕ виручка (див. ARRIVED_STATUS_CODES + NpTrackingStatus.arrived)
 const NP_STATUS_MAP: Record<string, 'DELIVERED' | 'RETURNED' | null> = {
   '9': 'DELIVERED',
-  '10': 'RETURNED',
-  '11': 'RETURNED',
+  '10': 'DELIVERED',
+  '11': 'DELIVERED',
+  '102': 'RETURNED',
+  '103': 'RETURNED',
+  '105': 'RETURNED',
 };
 
 // NP StatusCode-и, що означають "посилка прибула до відділення/поштомата" (ще НЕ виручка).

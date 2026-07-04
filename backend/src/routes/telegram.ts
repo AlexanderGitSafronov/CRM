@@ -46,18 +46,19 @@ router.post('/webhook', async (req: Request, res: Response) => {
 
     // Проверяем подлинность ДО любых изменений состояния.
     // Telegram присылает secret_token (заданный в setWebhook) в этом заголовке.
-    if (cfg.webhookSecret) {
-      const provided = req.get('x-telegram-bot-api-secret-token') ?? '';
-      const expected = Buffer.from(cfg.webhookSecret);
-      const actual = Buffer.from(provided);
-      const valid = expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
-      if (!valid) {
-        logger.warn(`Telegram webhook secret mismatch for org ${order.organizationId}, ignoring update`);
-        return;
-      }
-    } else {
-      // Легаси-интеграция: set-webhook ещё не перезапускали с secret_token.
-      logger.warn(`Telegram webhook without secret configured for org ${order.organizationId}`);
+    // Fail-closed: без настроенного секрета апдейт неподтверждаем — не меняем статус,
+    // иначе любой аноним с id заказа мог бы подтвердить/отменить чужой заказ.
+    if (!cfg.webhookSecret) {
+      logger.warn(`Telegram webhook without secret for org ${order.organizationId} — ignoring. Re-run set-webhook to activate.`);
+      return;
+    }
+    const provided = req.get('x-telegram-bot-api-secret-token') ?? '';
+    const expected = Buffer.from(cfg.webhookSecret);
+    const actual = Buffer.from(provided);
+    const valid = expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+    if (!valid) {
+      logger.warn(`Telegram webhook secret mismatch for org ${order.organizationId}, ignoring update`);
+      return;
     }
 
     if (action === 'confirm') {

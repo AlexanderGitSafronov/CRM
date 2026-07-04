@@ -5,6 +5,7 @@ import { sendSmsToCustomer, getTurboSmsBalance, type TurboSmsChannel } from '../
 import { testAdtrackConnection } from '../services/adtrackWebhook';
 import fetch from 'node-fetch';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
+import { assertSafeExternalUrl } from '../utils/ssrfGuard';
 
 const router = Router();
 
@@ -101,8 +102,23 @@ router.put('/:type', async (req: AuthRequest, res: Response) => {
   return res.json(integration);
 });
 
+const looksMasked = (s: string | undefined): boolean => typeof s === 'string' && MASKED_RE.test(s);
+
 router.post('/telegram/test', async (req: AuthRequest, res: Response) => {
-  const { botToken, chatId } = req.body;
+  const orgId = req.user!.organizationId;
+  let { botToken } = req.body as { botToken?: string };
+  const { chatId } = req.body as { chatId?: string };
+  // botToken из UI приходит замаскированным (•••) при тесте сохранённой интеграции —
+  // подставляем реальный из БД, иначе тест всегда падает.
+  if (!botToken || looksMasked(botToken)) {
+    const existing = await prisma.integration.findUnique({
+      where: { organizationId_type: { organizationId: orgId, type: 'TELEGRAM' } },
+    });
+    try {
+      const cfg = existing ? (JSON.parse(existing.config) as { botToken?: string }) : {};
+      botToken = cfg.botToken;
+    } catch { /* битый JSON */ }
+  }
   if (!botToken || !chatId) {
     return res.status(400).json({ error: 'botToken and chatId required' });
   }
@@ -115,11 +131,25 @@ router.post('/telegram/test', async (req: AuthRequest, res: Response) => {
 });
 
 router.post('/turbosms/test', async (req: AuthRequest, res: Response) => {
-  const { token, senderName, channel, phone } = req.body as {
-    token: string; senderName: string; channel: TurboSmsChannel; phone: string;
-  };
-  if (!token || !senderName || !phone) {
-    return res.status(400).json({ error: 'token, senderName, phone required' });
+  const orgId = req.user!.organizationId;
+  let { token, senderName } = req.body as { token?: string; senderName?: string };
+  const { channel, phone } = req.body as { channel?: TurboSmsChannel; phone?: string };
+  if (!phone) {
+    return res.status(400).json({ error: 'phone required' });
+  }
+  // token (и senderName) из UI могут прийти замаскированными — берём сохранённые из БД.
+  if (!token || looksMasked(token) || !senderName) {
+    const existing = await prisma.integration.findUnique({
+      where: { organizationId_type: { organizationId: orgId, type: 'TURBOSMS' } },
+    });
+    try {
+      const cfg = existing ? (JSON.parse(existing.config) as { token?: string; senderName?: string }) : {};
+      if (!token || looksMasked(token)) token = cfg.token;
+      if (!senderName) senderName = cfg.senderName;
+    } catch { /* битый JSON */ }
+  }
+  if (!token || !senderName) {
+    return res.status(400).json({ error: 'token, senderName required' });
   }
   const ok = await sendSmsToCustomer(
     phone,
@@ -164,6 +194,13 @@ router.post('/adtrack/test', async (req: AuthRequest, res: Response) => {
   const isMask = (s: string | undefined) =>
     typeof s === 'string' && MASKED_RE.test(s);
   const realSecret = webhookSecret && !isMask(webhookSecret) ? webhookSecret : undefined;
+  // SSRF-guard: admin-задаваемый baseUrl не должен указывать на внутренние адреса.
+  if (baseUrl) {
+    const urlCheck = assertSafeExternalUrl(baseUrl);
+    if (!urlCheck.ok) {
+      return res.status(400).json({ success: false, error: urlCheck.error });
+    }
+  }
   const inline = trackingId && realSecret ? { trackingId, webhookSecret: realSecret, baseUrl } : undefined;
 
   const result = await testAdtrackConnection(orgId, inline);
@@ -204,6 +241,12 @@ router.post('/rashod/test', async (req: AuthRequest, res: Response) => {
 
   if (!resolvedBaseUrl || !resolvedToken) {
     return res.status(400).json({ success: false, error: 'Rashod integration is not configured (baseUrl + token required)' });
+  }
+
+  // SSRF-guard: baseUrl задаёт админ, а ответ отражается — блокируем внутренние адреса.
+  const urlCheck = assertSafeExternalUrl(resolvedBaseUrl);
+  if (!urlCheck.ok) {
+    return res.status(400).json({ success: false, error: urlCheck.error });
   }
 
   const endpoint = `${resolvedBaseUrl.replace(/\/+$/, '')}/api/webhook/income`;

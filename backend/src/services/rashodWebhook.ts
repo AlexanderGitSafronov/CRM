@@ -2,6 +2,25 @@ import fetch from 'node-fetch';
 import prisma from './prisma';
 import logger from '../utils/logger';
 
+// Таймаут для внешнего вебхука — чтобы await не подвесил serverless-обработчик,
+// если Rashod недоступен/медленный.
+const WEBHOOK_TIMEOUT_MS = 8000;
+
+async function fetchWithTimeout(url: string, body: unknown): Promise<{ ok: boolean; status: number; text: () => Promise<string> }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
+  try {
+    return await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal as unknown as import('node-fetch').RequestInit['signal'],
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const SOURCE_MAP: Record<string, string> = {
   LANDING: 'landing',
   MAGAZ: 'store',
@@ -65,18 +84,14 @@ export async function sendIncomeToRashod(params: {
   const date = (params.deliveredAt ?? new Date()).toISOString().split('T')[0];
 
   try {
-    const res = await fetch(`${cfg.baseUrl}/api/webhook/income`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token: cfg.token,
-        amount: params.total,
-        source,
-        description: `Замовлення #${params.orderNum}`,
-        date,
-        orderId: params.orderId,
-        orderNum: params.orderNum,
-      }),
+    const res = await fetchWithTimeout(`${cfg.baseUrl}/api/webhook/income`, {
+      token: cfg.token,
+      amount: params.total,
+      source,
+      description: `Замовлення #${params.orderNum}`,
+      date,
+      orderId: params.orderId,
+      orderNum: params.orderNum,
     });
 
     if (!res.ok) {
@@ -117,18 +132,14 @@ export async function reverseIncomeToRashod(params: {
   const amount = -Math.abs(params.total);
 
   try {
-    const res = await fetch(`${cfg.baseUrl}/api/webhook/income`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token: cfg.token,
-        amount,
-        source,
-        description: `Реверс замовлення #${params.orderNum} (повернення)`,
-        date,
-        orderId: params.orderId,
-        orderNum: params.orderNum,
-      }),
+    const res = await fetchWithTimeout(`${cfg.baseUrl}/api/webhook/income`, {
+      token: cfg.token,
+      amount,
+      source,
+      description: `Реверс замовлення #${params.orderNum} (повернення)`,
+      date,
+      orderId: params.orderId,
+      orderNum: params.orderNum,
     });
 
     if (!res.ok) {

@@ -64,7 +64,9 @@ export const search = async (req: AuthRequest, res: Response) => {
           { sku: { contains: q, mode: 'insensitive' as const } },
         ],
       },
-      select: { id: true, name: true, sku: true, salePrice: true, stock: true, image: true },
+      // image намеренно НЕ выбираем — палитра поиска его не рендерит, а base64
+      // до ~500KB на товар раздувал ответ на каждый ввод.
+      select: { id: true, name: true, sku: true, salePrice: true, stock: true },
       take: 10,
       orderBy: { name: 'asc' },
     }),

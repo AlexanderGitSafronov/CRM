@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { logActivity } from '../services/notifications';
+import { passwordIssue } from './authController';
 
 export const getUsers = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
@@ -38,8 +39,9 @@ export const createUser = async (req: AuthRequest, res: Response) => {
     return res.status(400).json({ error: 'Invalid role' });
   }
 
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Пароль має містити мінімум 8 символів' });
+  const pwIssue = passwordIssue(password);
+  if (pwIssue) {
+    return res.status(400).json({ error: pwIssue });
   }
 
   // Plan limit
@@ -121,10 +123,13 @@ export const updateUser = async (req: AuthRequest, res: Response) => {
   if (role) updateData.role = role;
   if (active !== undefined) updateData.active = Boolean(active);
   if (password) {
-    if (password.length < 8) {
-      return res.status(400).json({ error: 'Пароль має містити мінімум 8 символів' });
+    const pwIssue = passwordIssue(password);
+    if (pwIssue) {
+      return res.status(400).json({ error: pwIssue });
     }
     updateData.password = await bcrypt.hash(password, 10);
+    // Смена пароля инвалидирует ранее выданные JWT (auth-middleware сверяет passwordChangedAt).
+    updateData.passwordChangedAt = new Date();
   }
 
   const user = await prisma.user.update({
@@ -146,6 +151,16 @@ export const deleteUser = async (req: AuthRequest, res: Response) => {
 
   const user = await prisma.user.findFirst({ where: { id, organizationId: orgId } });
   if (!user) return res.status(404).json({ error: 'User not found' });
+
+  // CcPayment.operator — FK Restrict (без onDelete): удаление оператора с записями
+  // выплат упало бы с 500 и снесло бы аудит выплат. Блокируем с понятным сообщением —
+  // такого пользователя нужно деактивировать, а не удалять.
+  const ccPaymentsCount = await prisma.ccPayment.count({ where: { operatorId: id, organizationId: orgId } });
+  if (ccPaymentsCount > 0) {
+    return res.status(400).json({
+      error: 'У користувача є записи виплат КЦ. Деактивуйте його замість видалення, щоб зберегти історію.',
+    });
+  }
 
   await prisma.order.updateMany({ where: { managerId: id, organizationId: orgId }, data: { managerId: null } });
 

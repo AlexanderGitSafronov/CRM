@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import api from '@/lib/api';
 import { formatCurrency, formatDate } from '@/lib/utils';
@@ -82,6 +82,10 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  // Ref (а не lastUpdated из замыкания) — интервальный loadData создаётся один раз и
+  // видел бы lastUpdated=null навсегда, из-за чего ЛЮБОЙ фоновый сбой затирал дашборд
+  // экраном ошибки. Ref всегда читает актуальное значение.
+  const hasLoadedRef = useRef(false);
 
   const loadData = async (silent = false) => {
     if (!silent) setRefreshing(true);
@@ -97,11 +101,12 @@ export default function DashboardPage() {
       setChartData(chartRes.data);
       setKpi(kpiRes.data);
       setLastUpdated(new Date());
+      hasLoadedRef.current = true;
       setError(false);
     } catch {
-      // Show inline error only on the initial load; silent refreshes keep stale data.
-      if (!silent) setError(true);
-      else if (!lastUpdated) setError(true);
+      // Экран ошибки показываем только пока ни одной успешной загрузки не было.
+      // Если данные уже есть — фоновый/ручной сбой оставляет их как есть (stale).
+      if (!hasLoadedRef.current) setError(true);
     }
     // Cash-in-transit is an additive KPI — fetched separately so a slow/absent endpoint
     // never blocks or crashes the core dashboard load.
@@ -115,7 +120,14 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadData(true);
-    const interval = setInterval(() => loadData(true), 30000);
+    // Не опрашиваем на скрытой вкладке — экономим запросы и Neon-соединения.
+    const interval = setInterval(() => {
+      if (!document.hidden) loadData(true);
+    }, 30000);
+
+    // При возвращении на вкладку сразу подтягиваем свежие данные.
+    const onVisible = () => { if (!document.hidden) loadData(true); };
+    document.addEventListener('visibilitychange', onVisible);
 
     // Обновление при новом заказе (SSE транслируется из layout)
     const onRefresh = () => loadData(true);
@@ -123,6 +135,7 @@ export default function DashboardPage() {
 
     return () => {
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('dashboard:refresh', onRefresh);
     };
   }, []);

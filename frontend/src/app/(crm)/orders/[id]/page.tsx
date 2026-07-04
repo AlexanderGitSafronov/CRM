@@ -169,6 +169,20 @@ export default function OrderDetailPage() {
     });
   }, [id]);
 
+  // Терминальные статусы двигают деньги (доход/реверс в Rashod) и плохо откатываются —
+  // требуем подтверждение, чтобы один случайный клик не менял их молча.
+  const TERMINAL_STATUSES: OrderStatus[] = ['DELIVERED', 'CANCELLED', 'RETURNED'];
+  const [pendingStatus, setPendingStatus] = useState<OrderStatus | null>(null);
+
+  const requestStatusChange = (status: OrderStatus) => {
+    if (!order || status === order.status) return;
+    if (TERMINAL_STATUSES.includes(status)) {
+      setPendingStatus(status);
+    } else {
+      void handleStatusChange(status);
+    }
+  };
+
   const handleStatusChange = async (status: OrderStatus) => {
     if (!order || status === order.status) return;
     setStatusUpdating(true);
@@ -306,7 +320,7 @@ export default function OrderDetailPage() {
               {STATUSES.map((s) => (
                 <button
                   key={s}
-                  onClick={() => canEdit && handleStatusChange(s)}
+                  onClick={() => canEdit && requestStatusChange(s)}
                   disabled={statusUpdating || !canEdit}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
                     order.status === s
@@ -755,6 +769,18 @@ export default function OrderDetailPage() {
         onConfirm={handleDelete}
         message={`Удалить заказ #${order.orderNum}? Это действие необратимо.`}
         loading={deleteLoading}
+      />
+
+      <ConfirmDialog
+        open={!!pendingStatus}
+        onClose={() => setPendingStatus(null)}
+        onConfirm={() => {
+          const s = pendingStatus;
+          setPendingStatus(null);
+          if (s) void handleStatusChange(s);
+        }}
+        message={pendingStatus ? `Змінити статус на «${ORDER_STATUS_LABELS[pendingStatus]}»? Це впливає на облік грошей і важко відкотити.` : ''}
+        loading={statusUpdating}
       />
     </div>
   );

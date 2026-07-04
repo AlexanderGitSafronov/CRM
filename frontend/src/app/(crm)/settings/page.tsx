@@ -221,6 +221,7 @@ export default function SettingsPage() {
   const [showWebhookForm, setShowWebhookForm] = useState(false);
   const [webhookName, setWebhookName] = useState('');
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [deleteWebhookId, setDeleteWebhookId] = useState<string | null>(null);
 
   // TurboSMS
   const [turboConfig, setTurboConfig] = useState({
@@ -454,12 +455,18 @@ export default function SettingsPage() {
     }
   };
 
-  const handleDeleteWebhook = async (id: string) => {
+  const handleDeleteWebhook = async () => {
+    const id = deleteWebhookId;
+    if (!id) return;
     try {
       await api.delete(`/webhook/tokens/${id}`);
       setWebhooks((prev) => prev.filter((w) => w.id !== id));
       toast.success('Токен удалён');
-    } catch {}
+    } catch {
+      toast.error('Не вдалося видалити токен');
+    } finally {
+      setDeleteWebhookId(null);
+    }
   };
 
   const handleCopy = (token: string) => {
@@ -932,7 +939,7 @@ export default function SettingsPage() {
                     {copiedToken === wh.token ? <CheckCircle className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
                   </button>
                   <button
-                    onClick={() => handleDeleteWebhook(wh.id)}
+                    onClick={() => setDeleteWebhookId(wh.id)}
                     className="p-1.5 text-gray-400 hover:text-red-500 rounded transition-colors"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -1644,6 +1651,13 @@ export default function SettingsPage() {
         onClose={() => setDeleteUserId(null)}
         onConfirm={handleDeleteUser}
         message="Удалить пользователя? Его заказы останутся без менеджера."
+      />
+
+      <ConfirmDialog
+        open={!!deleteWebhookId}
+        onClose={() => setDeleteWebhookId(null)}
+        onConfirm={handleDeleteWebhook}
+        message="Видалити webhook-токен? Інтеграції, що використовують його, перестануть працювати."
       />
     </div>
   );

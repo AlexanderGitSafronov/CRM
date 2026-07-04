@@ -1,10 +1,11 @@
 import { Response } from 'express';
 import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
+import { parsePagination } from '../utils/pagination';
 
 export const getNotifications = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
-  const { unreadOnly, page = '1', limit = '20' } = req.query as Record<string, string>;
+  const { unreadOnly, page, limit } = req.query as Record<string, string>;
 
   const where: Record<string, unknown> = {
     organizationId: orgId,
@@ -12,14 +13,13 @@ export const getNotifications = async (req: AuthRequest, res: Response) => {
   };
   if (unreadOnly === 'true') where.read = false;
 
-  const pageNum = Math.max(1, parseInt(page));
-  const limitNum = Math.min(100, parseInt(limit));
+  const { page: pageNum, limit: limitNum, skip } = parsePagination(page, limit);
 
   const [notifications, total, unreadCount] = await Promise.all([
     prisma.notification.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      skip: (pageNum - 1) * limitNum,
+      skip,
       take: limitNum,
     }),
     prisma.notification.count({ where }),

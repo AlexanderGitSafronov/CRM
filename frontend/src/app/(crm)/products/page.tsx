@@ -281,14 +281,14 @@ export default function ProductsPage() {
                     </td>
                     <td className="p-4 text-center">
                       <div className="flex items-center justify-center gap-1">
-                        {product.stock < 5 && (
+                        {product.stock < ((product as Product & { lowStockThreshold?: number }).lowStockThreshold ?? 5) && (
                           <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />
                         )}
                         <span
                           className={`text-sm font-medium ${
                             product.stock === 0
                               ? 'text-red-500'
-                              : product.stock < 5
+                              : product.stock < ((product as Product & { lowStockThreshold?: number }).lowStockThreshold ?? 5)
                               ? 'text-yellow-500'
                               : 'text-gray-900 dark:text-white'
                           }`}

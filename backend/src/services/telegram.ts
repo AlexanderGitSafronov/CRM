@@ -1,6 +1,15 @@
 import fetch from 'node-fetch';
 import logger from '../utils/logger';
 
+// Экранирование для parse_mode:'HTML'. Без него имя с '<'/'>'/'&' валит весь
+// апдейт (Telegram отвечает 400) и уведомление молча теряется.
+export function escapeHtml(s: unknown): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 interface TelegramMessage {
   botToken: string;
   chatId: string;
@@ -55,15 +64,15 @@ export function formatOrderNotification(order: {
   items: Array<{ name: string; quantity: number; price: number }>;
 }) {
   const itemsList = order.items
-    .map((item) => `  • ${item.name} x${item.quantity} — ${item.price.toLocaleString('uk-UA')} грн`)
+    .map((item) => `  • ${escapeHtml(item.name)} x${item.quantity} — ${item.price.toLocaleString('uk-UA')} грн`)
     .join('\n');
 
   return `🛒 <b>Новый заказ #${order.orderNum}</b>
 
-👤 Клиент: ${order.customer.name}
-📱 Телефон: ${order.customer.phone}
+👤 Клиент: ${escapeHtml(order.customer.name)}
+📱 Телефон: ${escapeHtml(order.customer.phone)}
 📦 Товары:
 ${itemsList}
 💰 Сумма: <b>${order.total.toLocaleString('uk-UA')} грн</b>
-📡 Источник: ${order.source}`;
+📡 Источник: ${escapeHtml(order.source)}`;
 }

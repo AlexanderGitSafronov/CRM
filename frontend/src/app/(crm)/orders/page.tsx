@@ -65,7 +65,7 @@ function isOverdueSla(order: Order): boolean {
 }
 
 const STATUSES: OrderStatus[] = [
-  'NEW', 'PROCESSING', 'CONFIRMED', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'RETURNED',
+  'NEW', 'PROCESSING', 'CONFIRMED', 'CALLED', 'NO_ANSWER', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'RETURNED',
 ];
 
 type SortField = 'orderNum' | 'total' | 'createdAt' | 'status';
@@ -144,6 +144,9 @@ export default function OrdersPage() {
   const urlTimer = useRef<ReturnType<typeof setTimeout>>();
   const didMount = useRef(false);
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+  // Порядковый номер запроса списка: устаревший (более ранний) ответ не должен
+  // перетирать более свежий результат при быстрой смене фильтров.
+  const reqSeq = useRef(0);
 
   const fetchCounters = useCallback(() => {
     api.get('/orders/counters')
@@ -152,6 +155,7 @@ export default function OrdersPage() {
   }, []);
 
   const fetchOrders = useCallback(async () => {
+    const myReq = ++reqSeq.current;
     setLoading(true);
     setLoadError(false);
     try {
@@ -168,12 +172,14 @@ export default function OrdersPage() {
         sortOrder,
       };
       const res = await api.get('/orders', { params });
+      if (myReq !== reqSeq.current) return; // пришёл устаревший ответ — игнорируем
       setOrders(res.data.orders);
       setPagination(res.data.pagination);
     } catch {
+      if (myReq !== reqSeq.current) return;
       setLoadError(true);
     }
-    setLoading(false);
+    if (myReq === reqSeq.current) setLoading(false);
     // Refresh chip counts every time the list reloads
     fetchCounters();
   }, [page, debouncedSearch, status, managerId, dateFrom, dateTo, hasTtn, sortBy, sortOrder, view, fetchCounters]);
@@ -181,6 +187,12 @@ export default function OrdersPage() {
   useEffect(() => {
     fetchOrders();
   }, [fetchOrders]);
+
+  // Выделение действует только в пределах текущей страницы/фильтра: при их смене
+  // сбрасываем его, иначе массовые действия и undo затрагивали бы невидимые заказы.
+  useEffect(() => {
+    setSelected([]);
+  }, [page, debouncedSearch, status, managerId, dateFrom, dateTo, hasTtn, view]);
 
   useEffect(() => {
     api.get('/users').then((res) => setManagers(res.data)).catch(() => {});
@@ -394,16 +406,29 @@ export default function OrdersPage() {
     try {
       const params = new URLSearchParams();
       if (status) params.set('status', status);
+      if (managerId) params.set('managerId', managerId);
+      if (hasTtn) params.set('hasTtn', hasTtn);
+      if (debouncedSearch) params.set('search', debouncedSearch);
       if (dateFrom) params.set('dateFrom', dateFrom);
       if (dateTo) params.set('dateTo', dateTo);
-      const url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/export/orders?${params}`;
+      const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001').trim().replace(/\/+$/, '');
+      const url = `${base}/api/export/orders?${params}`;
       const token = localStorage.getItem('crm_token');
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      // Без этой проверки 401/403 (JSON-ошибка) сохранялись бы как .csv с «успехом».
+      if (!res.ok) {
+        let msg = 'Помилка експорту';
+        try { const j = await res.json(); msg = j.error || msg; } catch { /* keep default */ }
+        toast.error(msg);
+        return;
+      }
       const blob = await res.blob();
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
+      const objectUrl = URL.createObjectURL(blob);
+      a.href = objectUrl;
       a.download = `orders_${new Date().toISOString().split('T')[0]}.csv`;
       a.click();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
       toast.success('Экспорт готов');
     } catch {
       toast.error('Ошибка экспорта');
@@ -749,28 +774,30 @@ export default function OrdersPage() {
           <span className="text-sm font-medium text-primary-700 dark:text-primary-400">
             Выбрано: {selected.length}
           </span>
-          <div className="relative">
-            <button
-              onClick={() => setShowBulkMenu(!showBulkMenu)}
-              className="btn-secondary text-sm"
-            >
-              Изменить статус
-              <ChevronDown className="w-3.5 h-3.5" />
-            </button>
-            {showBulkMenu && (
-              <div className="absolute top-full mt-1 left-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10 w-44">
-                {STATUSES.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => { setShowBulkMenu(false); setConfirmBulkStatus(s); }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                  >
-                    {ORDER_STATUS_LABELS[s]}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          {canEdit && (
+            <div className="relative">
+              <button
+                onClick={() => setShowBulkMenu(!showBulkMenu)}
+                className="btn-secondary text-sm"
+              >
+                Изменить статус
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+              {showBulkMenu && (
+                <div className="absolute top-full mt-1 left-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10 w-44">
+                  {STATUSES.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => { setShowBulkMenu(false); setConfirmBulkStatus(s); }}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      {ORDER_STATUS_LABELS[s]}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {canEdit && (
             <>
               {/* Assign manager */}

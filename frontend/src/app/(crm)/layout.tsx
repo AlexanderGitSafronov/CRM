@@ -8,11 +8,19 @@ import Header from '@/components/layout/Header';
 import SearchPalette from '@/components/SearchPalette';
 import { CelebrationListener } from '@/components/CelebrationListener';
 import { WelcomeTour } from '@/components/WelcomeTour';
+import { BrandingApplier } from '@/components/BrandingApplier';
 import api from '@/lib/api';
+
+// Один переиспользуемый AudioContext на вкладку: раньше каждый новый заказ создавал
+// свой контекст, а браузер лимитирует их (~6) — после нескольких заказов new AudioContext()
+// бросал исключение и звук молча пропадал.
+let sharedAudioCtx: AudioContext | null = null;
 
 function playChime() {
   try {
-    const ctx = new AudioContext();
+    if (!sharedAudioCtx) sharedAudioCtx = new AudioContext();
+    const ctx = sharedAudioCtx;
+    if (ctx.state === 'suspended') void ctx.resume();
     const notes = [880, 1108]; // A5 → C#6
     notes.forEach((freq, i) => {
       const osc = ctx.createOscillator();
@@ -48,6 +56,12 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
+  // zustand persist регидратируется из localStorage синхронно, поэтому на первом
+  // клиентском рендере _hasHydrated/user уже заполнены и расходятся с SSR (спиннер) →
+  // hydration mismatch. mounted стартует false и на сервере, и на первом клиентском
+  // рендере — они совпадают; настоящий гейт включается только после mount.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   // Load sound preference from localStorage on mount
   useEffect(() => {
@@ -166,7 +180,7 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
     };
   }, [user]);
 
-  if (!_hasHydrated || !user) {
+  if (!mounted || !_hasHydrated || !user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
@@ -196,6 +210,7 @@ export default function CrmLayout({ children }: { children: React.ReactNode }) {
       <SearchPalette />
       <CelebrationListener />
       <WelcomeTour />
+      <BrandingApplier />
     </div>
   );
 }

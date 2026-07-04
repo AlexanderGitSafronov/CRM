@@ -50,10 +50,13 @@ export default function BulkTtnModal({ open, onClose, orders, onDone }: Props) {
   };
 
   const handleCreate = async () => {
-    if (!snapshot.length) return;
+    // При повторе шлём ТОЛЬКО ещё не успешные заказы — иначе на уже созданные
+    // ТТН выписалась бы вторая платная накладная.
+    const pending = snapshot.filter((o) => results[o.id] !== 'success');
+    if (!pending.length) return;
     setLoading(true);
     try {
-      const items = snapshot.map((o) => {
+      const items = pending.map((o) => {
         const r = rows[o.id];
         const w = parseFloat(r?.weight ?? '1');
         return {
@@ -69,22 +72,22 @@ export default function BulkTtnModal({ open, onClose, orders, onDone }: Props) {
         results?: { orderId: string; ttn?: string; error?: string }[];
       };
 
-      // Map per-order results if the API returns them, otherwise fall back to counts
+      // Обновляем результаты только по отправленным заказам, сохраняя прежние успехи.
       const nextResults: Record<string, RowResult> = {};
       if (Array.isArray(data.results)) {
         data.results.forEach((r) => {
           nextResults[r.orderId] = r.ttn ? 'success' : { error: r.error || 'Помилка' };
         });
-        // Any selected order without an explicit result is treated as success
-        snapshot.forEach((o) => {
+        pending.forEach((o) => {
           if (!nextResults[o.id]) nextResults[o.id] = 'success';
         });
       } else {
-        snapshot.forEach((o) => { nextResults[o.id] = 'success'; });
+        pending.forEach((o) => { nextResults[o.id] = 'success'; });
       }
-      setResults(nextResults);
+      const merged = { ...results, ...nextResults };
+      setResults(merged);
 
-      const failed = Object.values(nextResults).filter((r) => r !== 'success').length;
+      const failed = snapshot.filter((o) => merged[o.id] && merged[o.id] !== 'success').length;
       const success = snapshot.length - failed;
       if (failed) {
         toast.error(`ТТН: ${success} створено, ${failed} помилок`);

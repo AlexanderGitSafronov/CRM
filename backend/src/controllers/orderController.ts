@@ -16,6 +16,7 @@ import {
   validateOrderItems,
   validateOrgManagerId,
 } from '../services/orderGuards';
+import { parsePagination } from '../utils/pagination';
 
 const ORDER_SELECT = {
   id: true,
@@ -140,9 +141,7 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
     }
   }
 
-  const pageNum = Math.max(1, parseInt(page));
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
-  const skip = (pageNum - 1) * limitNum;
+  const { page: pageNum, limit: limitNum, skip } = parsePagination(page, limit);
 
   const validSortFields = ['createdAt', 'total', 'orderNum', 'status'];
   const sortField = validSortFields.includes(sortBy) ? sortBy : 'createdAt';
@@ -400,6 +399,11 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     updateData.status = status;
     // Реальные даты жизненного цикла (честные деньги): отгрузка/выкуп/возврат.
     Object.assign(updateData, applyStatusTimestamps(status, existing));
+    // Повторный выкуп после возврата: сбрасываем флаг реверса, чтобы будущий
+    // возврат снова корректно списал доход (иначе второй возврат не реверсится).
+    if (status === 'DELIVERED') {
+      updateData.rashodReversedAt = null;
+    }
     if (
       (status === 'RETURNED' || status === 'CANCELLED') &&
       existing.deliveredAt != null &&
@@ -474,21 +478,23 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
     };
   }
 
-  if (historyEntries.length > 0) {
-    await prisma.orderHistory.createMany({
-      data: historyEntries.map((h) => ({ orderId: id, ...h })),
-    });
-  }
-
+  // История пишется ВНУТРИ транзакции вместе с апдейтом — иначе при откате
+  // апдейта в БД остаются фантомные записи STATUS_CHANGED.
   const order = await prisma.$transaction(async (tx) => {
     if (items?.length) {
       await tx.orderItem.deleteMany({ where: { orderId: id } });
     }
-    return tx.order.update({
+    const updated = await tx.order.update({
       where: { id },
       data: updateData,
       select: ORDER_SELECT,
     });
+    if (historyEntries.length > 0) {
+      await tx.orderHistory.createMany({
+        data: historyEntries.map((h) => ({ orderId: id, ...h })),
+      });
+    }
+    return updated;
   });
 
   const statusChanged = Boolean(status && status !== existing.status);
@@ -496,30 +502,31 @@ export const updateOrder = async (req: AuthRequest, res: Response) => {
   // Side-effects доставки только при реальной смене статуса — иначе повторное
   // сохранение уже DELIVERED заказа дублировало бы доход в Rashod.
   if (statusChanged && status === 'DELIVERED') {
-    sendIncomeToRashod({
+    // await (а не fire-and-forget): на Vercel serverless «отвалившийся» промис после
+    // ответа может не завершиться → доход теряется. Вебхук error-safe и с таймаутом.
+    await sendIncomeToRashod({
       organizationId: orgId,
       orderId: id,
       orderNum: order.orderNum,
       total: order.total,
       source: order.source,
       deliveredAt: new Date(),
-    }).catch(() => {});
+    });
     broadcastEvent(orgId, 'order_delivered', { orderNum: order.orderNum, total: order.total });
     void checkAchievements(orgId);
   }
 
   // Реверс ранее признанного дохода при возврате/отмене выкупленного заказа.
-  // Штамп rashodReversedAt уже записан в апдейте выше; вебхук — fire-and-forget,
-  // его сбой не должен ломать смену статуса.
+  // Штамп rashodReversedAt уже записан в апдейте выше.
   if (shouldReverseIncome) {
-    reverseIncomeToRashod({
+    await reverseIncomeToRashod({
       organizationId: orgId,
       orderId: id,
       orderNum: order.orderNum,
       total: existing.total,
       source: order.source,
       returnedAt: new Date(),
-    }).catch(() => {});
+    });
   }
 
   // AdTrack: шлём любое релевантное изменение статуса. Сервис сам игнорит
@@ -567,7 +574,10 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
 
   const existing = await prisma.order.findFirst({
     where: { id, organizationId: orgId },
-    select: { status: true, orderNum: true, total: true, managerId: true },
+    select: {
+      status: true, orderNum: true, total: true, source: true, managerId: true,
+      deliveredAt: true, rashodReversedAt: true,
+    },
   });
 
   if (!existing) {
@@ -583,12 +593,23 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
 
   const updateData: Record<string, unknown> = {};
 
+  // Реверс дохода при отмене уже выкупленного заказа (как в updateOrder).
+  let shouldReverseIncome = false;
+
   if (status && status !== existing.status) {
     const ccStatuses = ['CALLED', 'NO_ANSWER', 'CANCELLED', 'CONFIRMED', 'NEW'];
     if (!ccStatuses.includes(status)) {
       return res.status(400).json({ error: 'Invalid status for call center' });
     }
     updateData.status = status;
+    if (
+      status === 'CANCELLED' &&
+      existing.deliveredAt != null &&
+      existing.rashodReversedAt == null
+    ) {
+      shouldReverseIncome = true;
+      updateData.rashodReversedAt = new Date();
+    }
     historyEntries.push({
       action: 'STATUS_CHANGED',
       oldValue: existing.status,
@@ -606,20 +627,16 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
   if (comment !== undefined) updateData.comment = comment?.trim() || null;
   if (cancelReason !== undefined) updateData.cancelReason = cancelReason?.trim() || null;
 
+  // Доп. продаж (upsell): позицию и новый total пишем атомарно вместе с апдейтом
+  // заказа и историей — иначе total мог разойтись с суммой позиций при частичном сбое.
+  let upsellItemPrice: number | null = null;
   if (upsellAmount !== undefined && upsellAmount !== null && upsellAmount !== '') {
     const amount = Number(upsellAmount);
     if (!Number.isFinite(amount) || amount < 0 || amount > 10000000) {
       return res.status(400).json({ error: 'Invalid upsellAmount' });
     }
     if (amount > 0) {
-      await prisma.orderItem.create({
-        data: {
-          orderId: id,
-          name: 'Доп. продаж',
-          quantity: 1,
-          price: amount,
-        },
-      });
+      upsellItemPrice = amount;
       updateData.total = existing.total + amount;
       historyEntries.push({
         action: 'UPSELL_ADDED',
@@ -629,17 +646,37 @@ export const ccUpdateOrder = async (req: AuthRequest, res: Response) => {
     }
   }
 
-  if (historyEntries.length > 0) {
-    await prisma.orderHistory.createMany({
-      data: historyEntries.map((h) => ({ orderId: id, ...h })),
+  const order = await prisma.$transaction(async (tx) => {
+    if (upsellItemPrice !== null) {
+      await tx.orderItem.create({
+        data: { orderId: id, name: 'Доп. продаж', quantity: 1, price: upsellItemPrice },
+      });
+    }
+    const updated = await tx.order.update({
+      where: { id },
+      data: updateData,
+      select: ORDER_SELECT,
+    });
+    if (historyEntries.length > 0) {
+      await tx.orderHistory.createMany({
+        data: historyEntries.map((h) => ({ orderId: id, ...h })),
+      });
+    }
+    return updated;
+  });
+
+  // Реверс ранее признанного дохода при отмене выкупленного заказа
+  // (await, чтобы на serverless вебхук успел уйти до завершения функции).
+  if (shouldReverseIncome) {
+    await reverseIncomeToRashod({
+      organizationId: orgId,
+      orderId: id,
+      orderNum: order.orderNum,
+      total: existing.total,
+      source: existing.source,
+      returnedAt: new Date(),
     });
   }
-
-  const order = await prisma.order.update({
-    where: { id },
-    data: updateData,
-    select: ORDER_SELECT,
-  });
 
   // AdTrack: смены статуса из call-center (CALLED/NO_ANSWER не пойдут — мапа их игнорит).
   if (status && status !== existing.status) {
@@ -671,6 +708,19 @@ export const deleteOrder = async (req: AuthRequest, res: Response) => {
   const existing = await prisma.order.findFirst({ where: { id, organizationId: orgId } });
   if (!existing) {
     return res.status(404).json({ error: 'Заказ не найден' });
+  }
+
+  // Удаление выкупленного заказа, чей доход ещё стоит в Rashod (deliveredAt != null,
+  // не реверсился) — списываем доход, иначе он остаётся фантомом в учёте.
+  if (existing.deliveredAt != null && existing.rashodReversedAt == null) {
+    await reverseIncomeToRashod({
+      organizationId: orgId,
+      orderId: existing.id,
+      orderNum: existing.orderNum,
+      total: existing.total,
+      source: existing.source,
+      returnedAt: new Date(),
+    });
   }
 
   await prisma.order.delete({ where: { id } });
@@ -731,6 +781,20 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
     }
   }
 
+  // Повторный выкуп после возврата через bulk: сбрасываем rashodReversedAt тем,
+  // что реально перешли в DELIVERED, чтобы будущий возврат снова корректно реверсился.
+  if (status === 'DELIVERED') {
+    const toClear = orders
+      .filter((o) => o.status !== 'DELIVERED' && o.rashodReversedAt != null)
+      .map((o) => o.id);
+    if (toClear.length > 0) {
+      await prisma.order.updateMany({
+        where: { id: { in: toClear }, organizationId: orgId },
+        data: { rashodReversedAt: null },
+      });
+    }
+  }
+
   await prisma.orderHistory.createMany({
     data: orders.map((o) => ({
       orderId: o.id,
@@ -745,16 +809,19 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
   // в DELIVERED (как в одиночном updateOrder).
   if (status === 'DELIVERED') {
     const newlyDelivered = orders.filter((o) => o.status !== 'DELIVERED');
-    for (const o of newlyDelivered) {
-      sendIncomeToRashod({
-        organizationId: orgId,
-        orderId: o.id,
-        orderNum: o.orderNum,
-        total: o.total,
-        source: o.source,
-        deliveredAt: new Date(),
-      }).catch(() => {});
-    }
+    // Promise.all + await: конкурентно и с гарантией завершения до ответа на serverless.
+    await Promise.all(
+      newlyDelivered.map((o) =>
+        sendIncomeToRashod({
+          organizationId: orgId,
+          orderId: o.id,
+          orderNum: o.orderNum,
+          total: o.total,
+          source: o.source,
+          deliveredAt: new Date(),
+        }),
+      ),
+    );
     if (newlyDelivered.length > 0) {
       void checkAchievements(orgId);
     }
@@ -774,16 +841,18 @@ export const bulkUpdateStatus = async (req: AuthRequest, res: Response) => {
           where: { id: { in: toReverse.map((o) => o.id) }, organizationId: orgId },
           data: { rashodReversedAt: new Date() },
         });
-        for (const o of toReverse) {
-          reverseIncomeToRashod({
-            organizationId: orgId,
-            orderId: o.id,
-            orderNum: o.orderNum,
-            total: o.total,
-            source: o.source,
-            returnedAt: new Date(),
-          }).catch(() => {});
-        }
+        await Promise.all(
+          toReverse.map((o) =>
+            reverseIncomeToRashod({
+              organizationId: orgId,
+              orderId: o.id,
+              orderNum: o.orderNum,
+              total: o.total,
+              source: o.source,
+              returnedAt: new Date(),
+            }),
+          ),
+        );
       } catch {
         // Реверс не критичен для смены статуса — намеренно глотаем,
         // массовая смена статуса уже применена выше.
@@ -857,6 +926,30 @@ export const bulkDelete = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
   const { ids } = req.body as { ids: string[] };
   if (!ids?.length) return res.status(400).json({ error: 'IDs required' });
+
+  // Перед удалением реверсим доход выкупленным заказам, чей доход ещё стоит в Rashod.
+  const toReverse = await prisma.order.findMany({
+    where: {
+      id: { in: ids },
+      organizationId: orgId,
+      deliveredAt: { not: null },
+      rashodReversedAt: null,
+    },
+    select: { id: true, orderNum: true, total: true, source: true },
+  });
+  // await до удаления, чтобы вебхуки успели уйти на serverless (ошибки внутри проглатываются).
+  await Promise.all(
+    toReverse.map((o) =>
+      reverseIncomeToRashod({
+        organizationId: orgId,
+        orderId: o.id,
+        orderNum: o.orderNum,
+        total: o.total,
+        source: o.source,
+        returnedAt: new Date(),
+      }),
+    ),
+  );
 
   const result = await prisma.order.deleteMany({
     where: { id: { in: ids }, organizationId: orgId },

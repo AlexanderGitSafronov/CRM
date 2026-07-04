@@ -53,6 +53,9 @@ export default function CcLayout({ children }: { children: React.ReactNode }) {
   const [soundEnabled, setSoundEnabled] = useState(false);
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
+  // См. (crm)/layout: mounted-гейт против hydration mismatch от синхронной регидратации zustand.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   // Always start muted — user must click the icon to unlock AudioContext and enable sound
   useEffect(() => {
@@ -170,7 +173,7 @@ export default function CcLayout({ children }: { children: React.ReactNode }) {
     };
   }, [user, fetchNewCount, fetchQueueCount]);
 
-  if (!_hasHydrated || !user) {
+  if (!mounted || !_hasHydrated || !user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />

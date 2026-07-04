@@ -34,10 +34,15 @@ services:
       NODE_ENV: production
       CORS_ORIGIN: ${FRONTEND_URL:-http://localhost:3000}
       NP_API_KEY: ${NP_API_KEY:-}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TURBOSMS_TOKEN: ${TURBOSMS_TOKEN:-}
+      NP_GLOBAL_KEY_ORG_ID: ${NP_GLOBAL_KEY_ORG_ID:-}
+      BUSINESS_TZ_OFFSET_MINUTES: ${BUSINESS_TZ_OFFSET_MINUTES:-120}
+      # Примечание: TELEGRAM/TURBOSMS настраиваются per-org в UI (в БД) — код env для них не читает.
     ports:
       - "3001:3001"
+    # ВАЖНО: схема БД НЕ применяется автоматически при старте контейнера
+    # (prisma db push на дрейфе может удалить колонки). После первого `up`
+    # выполните один раз:
+    #   docker compose exec backend npx prisma db push
 
   frontend:
     build:

@@ -53,12 +53,30 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, []);
 
+  const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || 'https://crmpro-gamma.vercel.app').replace(/\/+$/, '');
+  const siteTitle = 'CRM Pro — CRM для товарного бізнесу: замовлення, Нова Пошта, аналітика';
+  const siteDesc = 'CRM Pro — система для товарного бізнесу: замовлення, кол-центр, інтеграція з Новою Поштою, аналітика грошей і виручки. Почніть безкоштовно.';
+  const ogImage = `${siteUrl}/icon-512.png`;
+
   return (
-    <html lang="ru" suppressHydrationWarning>
+    <html lang="uk" suppressHydrationWarning>
       <head>
-        <title>CRM — Управление заказами</title>
+        <title>{siteTitle}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-        <meta name="description" content="Современная CRM система для товарного бизнеса" />
+        <meta name="description" content={siteDesc} />
+        <link rel="canonical" href={siteUrl} />
+        {/* Open Graph — превью в Facebook/Telegram/Viber (каналы, где продукт продаётся) */}
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="CRM Pro" />
+        <meta property="og:title" content={siteTitle} />
+        <meta property="og:description" content={siteDesc} />
+        <meta property="og:url" content={siteUrl} />
+        <meta property="og:locale" content="uk_UA" />
+        <meta property="og:image" content={ogImage} />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={siteTitle} />
+        <meta name="twitter:description" content={siteDesc} />
+        <meta name="twitter:image" content={ogImage} />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <link rel="shortcut icon" href="/favicon.svg" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

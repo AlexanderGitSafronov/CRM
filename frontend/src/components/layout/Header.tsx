@@ -29,6 +29,7 @@ export default function Header({ onMenuToggle, title, soundEnabled = true, onSou
     <header className="h-14 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 flex items-center px-4 gap-3 sticky top-0 z-30">
       <button
         onClick={onMenuToggle}
+        aria-label="Відкрити меню"
         className="lg:hidden p-2 text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
       >
         <Menu className="w-5 h-5" />

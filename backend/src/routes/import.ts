@@ -3,9 +3,15 @@ import { parse } from 'csv-parse/sync';
 import prisma from '../services/prisma';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { logActivity } from '../services/notifications';
+import { validateImage } from '../controllers/productController';
 
 const router = Router();
 router.use(authenticate, requireRole('ADMIN', 'MANAGER'));
+
+// Импорт идёт по одной строке (2 последовательных запроса к Neon на строку).
+// На Vercel функция ограничена ~30s, поэтому крупные файлы завершались таймаутом
+// с тихим частичным импортом. Ограничиваем размер и просим разбить файл.
+const MAX_IMPORT_ROWS = 1000;
 
 interface ImportResult {
   imported: number;
@@ -51,6 +57,9 @@ router.post('/customers', async (req: AuthRequest, res: Response) => {
   }
 
   if (!rows.length) return res.status(400).json({ error: 'Порожній файл' });
+  if (rows.length > MAX_IMPORT_ROWS) {
+    return res.status(400).json({ error: `Забагато рядків (${rows.length}). Розбийте файл на частини по ${MAX_IMPORT_ROWS}.` });
+  }
 
   const result: ImportResult = { imported: 0, skipped: 0, errors: [] };
 
@@ -118,6 +127,9 @@ router.post('/products', async (req: AuthRequest, res: Response) => {
   }
 
   if (!rows.length) return res.status(400).json({ error: 'Порожній файл' });
+  if (rows.length > MAX_IMPORT_ROWS) {
+    return res.status(400).json({ error: `Забагато рядків (${rows.length}). Розбийте файл на частини по ${MAX_IMPORT_ROWS}.` });
+  }
 
   // Plan limit
   const [org, currentCount] = await Promise.all([
@@ -156,6 +168,10 @@ router.post('/products', async (req: AuthRequest, res: Response) => {
         if (exists) { result.skipped++; continue; }
       }
 
+      // Картинку прогоняем через тот же валидатор, что и API (js:/svg/oversize → отбрасываем).
+      const imgCheck = validateImage(image);
+      const safeImage = imgCheck.ok ? imgCheck.value ?? null : null;
+
       await prisma.product.create({
         data: {
           organizationId: orgId,
@@ -165,7 +181,7 @@ router.post('/products', async (req: AuthRequest, res: Response) => {
           purchasePrice: isNaN(purchase) ? 0 : purchase,
           salePrice: isNaN(sale) ? 0 : sale,
           stock: isNaN(stock) ? 0 : stock,
-          image: image || null,
+          image: safeImage,
         },
       });
       result.imported++;

@@ -61,8 +61,12 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     },
   });
   if (!existing) return res.status(404).json({ error: 'Not found' });
-  // Only owner (or admin) can edit a personal view; anyone in role can edit shared
-  if (existing.userId && existing.userId !== userId && req.user!.role !== 'ADMIN') {
+  // Общий вид (userId=null) может менять только ADMIN/MANAGER (кто их и создаёт);
+  // персональный — только владелец или ADMIN.
+  const canManageShared = req.user!.role === 'ADMIN' || req.user!.role === 'MANAGER';
+  if (existing.userId === null) {
+    if (!canManageShared) return res.status(403).json({ error: 'Forbidden' });
+  } else if (existing.userId !== userId && req.user!.role !== 'ADMIN') {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
@@ -86,7 +90,10 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
     where: { id, organizationId: orgId, OR: [{ userId: null }, { userId }] },
   });
   if (!existing) return res.status(404).json({ error: 'Not found' });
-  if (existing.userId && existing.userId !== userId && req.user!.role !== 'ADMIN') {
+  const canManageShared = req.user!.role === 'ADMIN' || req.user!.role === 'MANAGER';
+  if (existing.userId === null) {
+    if (!canManageShared) return res.status(403).json({ error: 'Forbidden' });
+  } else if (existing.userId !== userId && req.user!.role !== 'ADMIN') {
     return res.status(403).json({ error: 'Forbidden' });
   }
   await prisma.orderView.delete({ where: { id } });

@@ -17,9 +17,9 @@ export default function ConfirmDialog({
   open,
   onClose,
   onConfirm,
-  title = 'Подтверждение',
+  title = 'Підтвердження',
   message,
-  confirmLabel = 'Удалить',
+  confirmLabel = 'Видалити',
   loading,
 }: ConfirmDialogProps) {
   return (
@@ -32,7 +32,7 @@ export default function ConfirmDialog({
         <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{message}</p>
         <div className="flex gap-3">
           <button onClick={onClose} className="btn-secondary flex-1 justify-center">
-            Отмена
+            Скасувати
           </button>
           <button
             onClick={onConfirm}

@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { stringify } from 'csv-stringify/sync';
 import prisma from '../services/prisma';
 import { AuthRequest } from '../middleware/auth';
+import { parsePagination } from '../utils/pagination';
 
 // Защита от CSV formula injection: ячейка, начинающаяся с = + - @ или таба,
 // исполняется Excel'ем как формула. Префиксуем одинарной кавычкой —
@@ -13,10 +14,20 @@ const csvCell = (value: unknown): string => {
 
 export const exportOrders = async (req: AuthRequest, res: Response) => {
   const orgId = req.user!.organizationId;
-  const { status, dateFrom, dateTo, format = 'csv' } = req.query as Record<string, string>;
+  const { status, managerId, hasTtn, search, dateFrom, dateTo, format = 'csv' } = req.query as Record<string, string>;
 
   const where: Record<string, unknown> = { organizationId: orgId };
   if (status && status !== 'ALL') where.status = status;
+  if (managerId) where.managerId = managerId;
+  if (hasTtn === 'true') where.trackingNumber = { not: null };
+  else if (hasTtn === 'false') where.trackingNumber = null;
+  if (search) {
+    where.OR = [
+      { customer: { name: { contains: search, mode: 'insensitive' } } },
+      { customer: { phone: { contains: search } } },
+      { customer: { email: { contains: search, mode: 'insensitive' } } },
+    ];
+  }
   if (dateFrom || dateTo) {
     where.createdAt = {};
     if (dateFrom) (where.createdAt as Record<string, Date>).gte = new Date(dateFrom);
@@ -61,7 +72,8 @@ export const exportOrders = async (req: AuthRequest, res: Response) => {
     'Кол-во': o.items.reduce((s, i) => s + i.quantity, 0),
     'Сумма': o.total,
     'Статус': STATUS_LABELS[o.status] || o.status,
-    'Источник': SOURCE_LABELS[o.source] || o.source,
+    // source приходит из публичного вебхука без валидации против enum — экранируем от CSV-инъекции.
+    'Источник': csvCell(SOURCE_LABELS[o.source] || o.source),
     'Менеджер': csvCell(o.manager?.name || ''),
     'Комментарий': csvCell(o.comment || ''),
   }));
@@ -114,7 +126,15 @@ export const exportFinances = async (req: AuthRequest, res: Response) => {
     ADVERTISING: 'Реклама', SERVICES: 'Услуги', PURCHASE: 'Закупка', OTHER: 'Прочее',
   };
 
-  const expenseRows = expenses.map((e) => ({
+  // _ts — реальная метка времени для сортировки (строка «DD.MM.YYYY» из
+  // toLocaleDateString не парсится new Date() → NaN → неверный порядок). Убираем перед CSV.
+  type FinanceRow = {
+    _ts: number;
+    'Тип': string; 'Дата': string; 'Категория/Источник': string; 'Описание': string; 'Сумма': number;
+  };
+
+  const expenseRows: FinanceRow[] = expenses.map((e) => ({
+    _ts: new Date(e.date).getTime(),
     'Тип': 'Расход',
     'Дата': new Date(e.date).toLocaleDateString('uk-UA'),
     'Категория/Источник': EXPENSE_LABELS[e.category] || e.category,
@@ -122,19 +142,22 @@ export const exportFinances = async (req: AuthRequest, res: Response) => {
     'Сумма': -e.amount,
   }));
 
-  const revenueRows = deliveredOrders.map((o) => ({
-    'Тип': 'Доход',
+  const revenueRows: FinanceRow[] = deliveredOrders.map((o) => {
     // Date the parcel was actually redeemed (deliveredAt); fall back to createdAt
     // for any pre-backfill DELIVERED order that has no deliveredAt yet.
-    'Дата': (o.deliveredAt ?? o.createdAt).toLocaleDateString('uk-UA'),
-    'Категория/Источник': o.source,
-    'Описание': csvCell(`Замовлення #${o.orderNum} — ${o.customer.name}`),
-    'Сумма': o.total,
-  }));
+    const d = o.deliveredAt ?? o.createdAt;
+    return {
+      _ts: d.getTime(),
+      'Тип': 'Доход',
+      'Дата': d.toLocaleDateString('uk-UA'),
+      'Категория/Источник': csvCell(o.source),
+      'Описание': csvCell(`Замовлення #${o.orderNum} — ${o.customer.name}`),
+      'Сумма': o.total,
+    };
+  });
 
-  const allRows = [...revenueRows, ...expenseRows].sort((a, b) =>
-    new Date(b['Дата']).getTime() - new Date(a['Дата']).getTime()
-  );
+  const sorted = [...revenueRows, ...expenseRows].sort((a, b) => b._ts - a._ts);
+  const allRows: Array<Omit<FinanceRow, '_ts'>> = sorted.map(({ _ts, ...rest }) => rest);
 
   const totalRevenue = deliveredOrders.reduce((s, o) => s + o.total, 0);
   const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
@@ -157,15 +180,14 @@ export const getActivityLogs = async (req: AuthRequest, res: Response) => {
   if (action) where.action = { contains: action };
   if (entityType) where.entityType = entityType;
 
-  const pageNum = Math.max(1, parseInt(page));
-  const limitNum = Math.min(200, parseInt(limit));
+  const { page: pageNum, limit: limitNum, skip } = parsePagination(page, limit, { defLimit: 50, maxLimit: 200 });
 
   const [logs, total] = await Promise.all([
     prisma.activityLog.findMany({
       where,
       include: { user: { select: { id: true, name: true, email: true } } },
       orderBy: { createdAt: 'desc' },
-      skip: (pageNum - 1) * limitNum,
+      skip,
       take: limitNum,
     }),
     prisma.activityLog.count({ where }),

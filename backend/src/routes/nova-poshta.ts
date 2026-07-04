@@ -13,7 +13,11 @@ import { runSlaCheck, slaTrackerState } from '../workers/slaTracker';
 const router = Router();
 router.use(authenticate);
 
-// Helper: per-org NP API key (fallback to global env for default org)
+// Только этот орг может использовать глобальный NP_API_KEY из env как fallback.
+// Иначе любой тенант без своей интеграции работал бы с чужим (платформенным) НП-аккаунтом.
+const GLOBAL_NP_KEY_ORG = process.env.NP_GLOBAL_KEY_ORG_ID || '';
+
+// Helper: per-org NP API key. Глобальный env-ключ отдаём только выделенному орг.
 async function getNpApiKey(organizationId: string): Promise<string> {
   try {
     const integration = await prisma.integration.findUnique({
@@ -24,7 +28,7 @@ async function getNpApiKey(organizationId: string): Promise<string> {
       if (cfg.apiKey) return cfg.apiKey;
     }
   } catch { /* ignore */ }
-  return process.env.NP_API_KEY || '';
+  return GLOBAL_NP_KEY_ORG && organizationId === GLOBAL_NP_KEY_ORG ? (process.env.NP_API_KEY || '') : '';
 }
 
 router.get('/cities', async (req: AuthRequest, res: Response) => {
@@ -94,6 +98,10 @@ router.get('/sender-config', requireRole('ADMIN', 'MANAGER'), async (req: AuthRe
   if (!integration) return res.json({ configured: false, config: {} });
   try {
     const config = JSON.parse(integration.config) as Record<string, string>;
+    // apiKey не отдаём в открытом виде — маскируем (refs/labels не секретны).
+    if (typeof config.apiKey === 'string' && config.apiKey) {
+      config.apiKey = '•'.repeat(Math.min(config.apiKey.length, 40));
+    }
     return res.json({ configured: integration.active, config });
   } catch {
     return res.json({ configured: false, config: {} });
@@ -313,6 +321,12 @@ router.post('/bulk-create-ttn', requireRole('ADMIN', 'MANAGER'), async (req: Aut
   const smsConfig = await getTurboSmsConfig(prisma, orgId);
 
   for (const order of orders) {
+    // Идемпотентность: если ТТН уже есть — не выписываем вторую (защита от повторного
+    // bulk-запроса, который иначе создал бы дубль платной накладной).
+    if (order.trackingNumber) {
+      results.push({ orderId: order.id, orderNum: order.orderNum, ttn: order.trackingNumber });
+      continue;
+    }
     if (!order.npCityRef || !order.npWarehouseRef) {
       results.push({ orderId: order.id, orderNum: order.orderNum, error: 'Немає реф НП' });
       continue;
@@ -451,7 +465,7 @@ router.get('/print-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthReques
   });
   const apiKey = integration?.active
     ? (JSON.parse(integration.config) as { apiKey?: string }).apiKey || ''
-    : process.env.NP_API_KEY || '';
+    : (GLOBAL_NP_KEY_ORG && orgId === GLOBAL_NP_KEY_ORG ? (process.env.NP_API_KEY || '') : '');
   if (!apiKey) return res.status(400).json({ error: 'NP API key не задано' });
 
   const sizePath = size === 'A4' ? '' : '/100x100';
@@ -467,9 +481,11 @@ router.get('/print-ttn', requireRole('ADMIN', 'MANAGER'), async (req: AuthReques
     }
     const contentType = r.headers.get('content-type') || (format === 'pdf' ? 'application/pdf' : 'text/html');
     const ext = format === 'pdf' ? 'pdf' : 'html';
+    // Имя файла в Content-Disposition должно быть Latin1 — кириллица («шт») бросала
+    // ERR_INVALID_CHAR и падала в 500 при печати 2+ ТТН. Держим ASCII.
     const filename = ttns.length === 1
       ? `TTN-${ttns[0]}-${size}.${ext}`
-      : `TTN-${ttns.length}шт-${size}.${ext}`;
+      : `TTN-${ttns.length}pcs-${size}.${ext}`;
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     const buf = Buffer.from(await r.arrayBuffer());
