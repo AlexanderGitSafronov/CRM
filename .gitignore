@@ -13,6 +13,11 @@ out/
 .env
 .env.local
 .env.*.local
+.env.prod
+.env.production
+# vercel env pull output (keep .env.example tracked)
+.env.*
+!.env.example
 
 # Database (contains real user data)
 *.db
